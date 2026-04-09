@@ -33,10 +33,13 @@ func _init() -> void:
 	_validate_bush_prefab(output_root, str(sample_prefabs.get("bush", "")), expected)
 	_validate_lantern_prefab(output_root, str(sample_prefabs.get("lantern", "")), expected)
 	_validate_stairs_prefab(output_root, str(sample_prefabs.get("stairs", "")))
+	_validate_altar_prefab(output_root, str(sample_prefabs.get("altar", "")))
+	_validate_rune_prefab(output_root, str(sample_prefabs.get("rune", "")))
 	_validate_edge_prefab(output_root, str(sample_prefabs.get("edge", "")), expected)
 	_validate_polygon_prefab(output_root, str(sample_prefabs.get("polygon", "")))
 	_validate_player_prefab(output_root, str(sample_prefabs.get("player", "")))
 	_validate_broken_prefab_absent(output_root, str(sample_prefabs.get("broken", "")))
+	_validate_editor_only_prefab_absent(output_root, str(sample_prefabs.get("editor_only", "")))
 
 	_finish()
 
@@ -130,10 +133,39 @@ func _validate_stairs_prefab(output_root: String, prefab_name: String) -> void:
 	var root := _instantiate_prefab(output_root, "struct", prefab_name)
 	if root == null:
 		return
-	_assert_true(root.has_meta("unity_mono_behaviours"), "Stairs prefab preserves MonoBehaviour metadata")
-	if root.has_meta("unity_mono_behaviours"):
-		var behaviours: Variant = root.get_meta("unity_mono_behaviours")
-		_assert_true(behaviours is Array and not behaviours.is_empty(), "Stairs prefab MonoBehaviour metadata is non-empty")
+	_assert_true(root.has_meta("cainos_behavior_hints"), "Stairs prefab preserves normalized behavior hints")
+	var trigger_node: Node = root.find_child("Stairs Layer Trigger", true, false)
+	if trigger_node == null:
+		trigger_node = root
+	_assert_true(trigger_node != null, "Stairs prefab includes a behavior metadata node")
+	_assert_true(trigger_node.has_meta("unity_mono_behaviours"), "Stairs behavior node keeps legacy MonoBehaviour metadata")
+	_assert_true(trigger_node.has_meta("cainos_behavior_hints"), "Stairs behavior node keeps node-local behavior hints")
+	root.free()
+
+
+func _validate_altar_prefab(output_root: String, prefab_name: String) -> void:
+	var root := _instantiate_prefab(output_root, "props", prefab_name)
+	if root == null:
+		return
+	var altar_hints := _behavior_hints_for(root, "altar_trigger")
+	_assert_true(not altar_hints.is_empty(), "Altar prefab exposes altar_trigger behavior hint")
+	if not altar_hints.is_empty():
+		var data: Dictionary = altar_hints[0].get("data", {})
+		_assert_true(Array(data.get("rune_node_paths", [])).size() >= 2, "Altar behavior hint preserves rune node paths")
+	root.free()
+
+
+func _validate_rune_prefab(output_root: String, prefab_name: String) -> void:
+	var root := _instantiate_prefab(output_root, "props", prefab_name)
+	if root == null:
+		return
+	var root_hints := _behavior_hints_for(root, "sprite_color_animation")
+	_assert_true(not root_hints.is_empty(), "Rune prefab exposes sprite_color_animation behavior hint")
+	var glow := root.find_child("Glow", true, false)
+	_assert_true(glow is Node2D, "Rune prefab keeps Glow helper node")
+	if glow is Node:
+		var node_hints := _behavior_hints_for(glow, "sprite_color_animation")
+		_assert_true(not node_hints.is_empty(), "Glow node keeps node-local sprite_color_animation hint")
 	root.free()
 
 
@@ -180,12 +212,19 @@ func _validate_player_prefab(output_root: String, prefab_name: String) -> void:
 		return
 	var sprite := _find_first_sprite(root)
 	_assert_true(sprite != null, "Player prefab includes a Sprite2D descendant")
+	var player_hints := _behavior_hints_for(root, "top_down_character_controller")
+	_assert_true(not player_hints.is_empty(), "Player prefab exposes controller behavior hint")
 	root.free()
 
 
 func _validate_broken_prefab_absent(output_root: String, prefab_name: String) -> void:
 	var scene_path := output_root.path_join("scenes/prefabs/props/%s.tscn" % _sanitize_filename(prefab_name))
 	_assert_true(not FileAccess.file_exists(ProjectSettings.globalize_path(scene_path)), "Broken prefab scene remains absent")
+
+
+func _validate_editor_only_prefab_absent(output_root: String, prefab_name: String) -> void:
+	var scene_path := output_root.path_join("scenes/prefabs/editor_only/%s.tscn" % _sanitize_filename(prefab_name))
+	_assert_true(not FileAccess.file_exists(ProjectSettings.globalize_path(scene_path)), "Editor-only prefab scene remains absent")
 
 
 func _instantiate_prefab(output_root: String, family: String, prefab_name: String) -> Node:
@@ -214,6 +253,20 @@ func _find_first_sprite(node: Node) -> Sprite2D:
 		if sprite != null:
 			return sprite
 	return null
+
+
+func _behavior_hints_for(node: Node, expected_kind: String) -> Array:
+	if not node.has_meta("cainos_behavior_hints"):
+		return []
+	var hints: Variant = node.get_meta("cainos_behavior_hints")
+	if not (hints is Array):
+		return []
+	var matches := []
+	for hint_variant in hints:
+		var hint: Dictionary = hint_variant
+		if str(hint.get("kind", "")) == expected_kind:
+			matches.append(hint)
+	return matches
 
 
 func _count_tile_map_layers(node: Node) -> int:

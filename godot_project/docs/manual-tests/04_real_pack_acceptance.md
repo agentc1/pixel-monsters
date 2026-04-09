@@ -39,13 +39,24 @@ The smoke validator checks these real generated assets:
 - `PF Plant - Bush 01`
 - `PF Props - Stone Lantern 01`
 - `PF Struct - Stairs S 01 L`
+- `PF Props - Altar 01`
+- `PF Props - Rune Pillar X2`
 - `PF Player`
 
 Expected structure:
 - Bush keeps a `Shadow` child
 - Stone Lantern keeps a rectangle-style collision shape
-- Stairs preserve deferred MonoBehaviour metadata
+- Stairs preserve normalized `cainos_behavior_hints` and deferred MonoBehaviour metadata
+- Altar preserves normalized trigger metadata with rune-node mappings
+- Rune Pillar preserves normalized glow-animation metadata
 - Player includes visible sprite content
+
+Expected report detail:
+- `compatibility_report.md` includes prefab-level entries for the anchor prefabs
+- `PF Struct - Stairs S 01 L` is listed under the manual-behavior tier
+- `PF Props - Well 01` is listed under the approximated tier
+- `TP Grass`, `TP Stone Ground`, and `TP Wall` are listed under the editor-only Unity assets section instead of the semantic prefab tiers
+- `asset_catalog.md` lists named prefab scene paths for Bush, Stone Lantern, Stairs, Altar, Rune Pillar, and Player
 
 ## If it fails
 

@@ -31,6 +31,7 @@ Regression and QA assets:
   - `godot_project/docs/manual-tests/02_preview_and_catalog.md`
   - `godot_project/docs/manual-tests/03_sample_prefab_inspection.md`
   - `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
+  - `godot_project/docs/manual-tests/05_deferred_behavior_metadata.md`
 
 Testing tracks:
 - synthetic regression: no licensed pack required; uses a small importer-valid fixture package for automated and maintainer checks

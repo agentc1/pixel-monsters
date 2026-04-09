@@ -5,7 +5,8 @@ const UnityMetadataRegistry := preload("res://addons/cainos_basic_importer/unity
 
 const PACK_ID := "basic"
 const IMPORTER_ID := "cainos_basic_importer"
-const IMPORTER_VERSION := "0.2.0"
+const IMPORTER_VERSION := "0.3.0"
+const REPORT_FORMAT_VERSION := 3
 const DEFAULT_OUTPUT_ROOT := "res://cainos_imports/basic"
 const TILE_SIZE := Vector2i(32, 32)
 const DEFAULT_PPU := 32.0
@@ -82,6 +83,7 @@ func scan_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		"approximated_prefabs": inventory.get("approximated_prefabs", 0),
 		"manual_behavior_prefabs": inventory.get("manual_behavior_prefabs", 0),
 		"unresolved_or_skipped_prefabs": inventory.get("unresolved_or_skipped_prefabs", 0),
+		"editor_only_prefabs": inventory.get("editor_only_prefabs", 0),
 		"fallback_prop_cells": inventory.get("plain_prop_cells", 0),
 		"fallback_plant_cells": inventory.get("plain_plant_cells", 0),
 	}
@@ -110,7 +112,6 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 	var source_info: Dictionary = scan.get("source", {})
 	var semantic_registry: Dictionary = scan.get("semantic_registry", {})
 	var inventory: Dictionary = scan.get("inventory", {})
-	var compatibility: Array = scan.get("compatibility", [])
 
 	_log_message("Preparing output root: %s" % output_root)
 	_remove_tree_absolute(output_root_abs)
@@ -125,10 +126,13 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 
 	var outputs := []
 	var catalog := {
+		"format_version": REPORT_FORMAT_VERSION,
 		"pack_id": PACK_ID,
 		"tilesets": [],
 		"scene_collections": [],
 		"helper_scenes": [],
+		"prefabs": [],
+		"fallback_collections": [],
 	}
 	var generated_tilesets := {}
 
@@ -156,6 +160,9 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 			"struct": [],
 			"player": [],
 		},
+		"prefab_entries": [],
+		"editor_only_entries": [],
+		"catalog_prefabs": [],
 	}
 	if normalized_profile.get("prefer_semantic_prefabs", true) and semantic_registry.get("ok", false):
 		var semantic_result := _generate_semantic_prefab_collections(semantic_registry, copied_res_paths)
@@ -165,6 +172,8 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		semantic_generated = semantic_result
 		for entry_variant in semantic_result.get("catalog_entries", []):
 			catalog["scene_collections"].append(entry_variant)
+		for prefab_entry_variant in semantic_result.get("catalog_prefabs", []):
+			catalog["prefabs"].append(prefab_entry_variant)
 
 	if normalized_profile.get("generate_fallback_atlas_scenes", false) or catalog["scene_collections"].is_empty():
 		if copied_res_paths.has("props"):
@@ -172,14 +181,20 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 			if not props_plain.get("ok", false):
 				return props_plain
 			outputs.append_array(props_plain.get("paths", []))
-			catalog["scene_collections"].append(props_plain.get("catalog_entry", {}))
+			var props_catalog_entry: Dictionary = props_plain.get("catalog_entry", {})
+			catalog["scene_collections"].append(props_catalog_entry)
+			if str(props_catalog_entry.get("origin", "")) == "fallback_atlas":
+				catalog["fallback_collections"].append(props_catalog_entry)
 
 		if copied_res_paths.has("plants"):
 			var plants_plain := _generate_sprite_scene_collection("plants_plain", copied_res_paths.get("plants", ""), "scenes/fallback/plants/plain", "plant")
 			if not plants_plain.get("ok", false):
 				return plants_plain
 			outputs.append_array(plants_plain.get("paths", []))
-			catalog["scene_collections"].append(plants_plain.get("catalog_entry", {}))
+			var plants_catalog_entry: Dictionary = plants_plain.get("catalog_entry", {})
+			catalog["scene_collections"].append(plants_catalog_entry)
+			if str(plants_catalog_entry.get("origin", "")) == "fallback_atlas":
+				catalog["fallback_collections"].append(plants_catalog_entry)
 
 		if normalized_profile.get("generate_baked_shadow_helpers", false):
 			if copied_res_paths.has("extra_props_shadow"):
@@ -187,14 +202,20 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 				if not props_shadow.get("ok", false):
 					return props_shadow
 				outputs.append_array(props_shadow.get("paths", []))
-				catalog["scene_collections"].append(props_shadow.get("catalog_entry", {}))
+				var props_shadow_catalog: Dictionary = props_shadow.get("catalog_entry", {})
+				catalog["scene_collections"].append(props_shadow_catalog)
+				if str(props_shadow_catalog.get("origin", "")) == "fallback_atlas":
+					catalog["fallback_collections"].append(props_shadow_catalog)
 
 			if copied_res_paths.has("extra_plants_shadow"):
 				var plants_shadow := _generate_sprite_scene_collection("plants_shadow", copied_res_paths.get("extra_plants_shadow", ""), "scenes/fallback/plants/shadow_baked", "plant_shadow")
 				if not plants_shadow.get("ok", false):
 					return plants_shadow
 				outputs.append_array(plants_shadow.get("paths", []))
-				catalog["scene_collections"].append(plants_shadow.get("catalog_entry", {}))
+				var plants_shadow_catalog: Dictionary = plants_shadow.get("catalog_entry", {})
+				catalog["scene_collections"].append(plants_shadow_catalog)
+				if str(plants_shadow_catalog.get("origin", "")) == "fallback_atlas":
+					catalog["fallback_collections"].append(plants_shadow_catalog)
 
 	var player_helpers := {}
 	if normalized_profile.get("generate_player_helpers", true) and copied_res_paths.has("player"):
@@ -212,7 +233,9 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		for entry_variant in preview_result.get("catalog_entries", []):
 			catalog["helper_scenes"].append(entry_variant)
 
+	var compatibility: Array = _build_compatibility(inventory, normalized_profile, semantic_generated)
 	var manifest := {
+		"format_version": REPORT_FORMAT_VERSION,
 		"pack_id": PACK_ID,
 		"importer": {
 			"id": IMPORTER_ID,
@@ -229,6 +252,8 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		"profile_hash": _sha256_text(JSON.stringify(normalized_profile, "", true)),
 		"inventory": inventory,
 		"semantic_summary": semantic_generated.get("tier_counts", {}),
+		"semantic_prefabs": semantic_generated.get("prefab_entries", []),
+		"editor_only_prefabs": semantic_generated.get("editor_only_entries", []),
 		"outputs": outputs,
 		"catalog": catalog,
 	}
@@ -485,6 +510,7 @@ func _build_inventory(probe: Dictionary, semantic_registry: Dictionary) -> Dicti
 		"approximated_prefabs": 0,
 		"manual_behavior_prefabs": 0,
 		"unresolved_or_skipped_prefabs": 0,
+		"editor_only_prefabs": 0,
 	}
 
 	for key in TILESET_SPECS:
@@ -505,12 +531,17 @@ func _build_inventory(probe: Dictionary, semantic_registry: Dictionary) -> Dicti
 		inventory["approximated_prefabs"] = summary.get("approximated_prefabs", 0)
 		inventory["manual_behavior_prefabs"] = summary.get("manual_behavior_prefabs", 0)
 		inventory["unresolved_or_skipped_prefabs"] = summary.get("unresolved_or_skipped_prefabs", 0)
+		inventory["editor_only_prefabs"] = summary.get("editor_only_prefabs", 0)
 
 	return inventory
 
 
-func _build_compatibility(inventory: Dictionary) -> Array:
+func _build_compatibility(inventory: Dictionary, profile: Dictionary = {}, semantic_generated: Dictionary = {}) -> Array:
 	var compatibility := []
+	var semantic_enabled := profile.get("prefer_semantic_prefabs", true)
+	var generated_prefabs := len(semantic_generated.get("prefab_entries", []))
+	if semantic_enabled and generated_prefabs == 0:
+		generated_prefabs = int(inventory.get("supported_static_prefabs", 0)) + int(inventory.get("approximated_prefabs", 0)) + int(inventory.get("manual_behavior_prefabs", 0)) + int(inventory.get("unresolved_or_skipped_prefabs", 0))
 	compatibility.append({
 		"title": "TileSet atlases",
 		"status": "supported",
@@ -518,11 +549,11 @@ func _build_compatibility(inventory: Dictionary) -> Array:
 		"next": "Add a TileMapLayer node, assign a generated TileSet, and paint in the TileMap bottom panel.",
 	})
 
-	if inventory.get("semantic_available", false):
+	if inventory.get("semantic_available", false) and semantic_enabled:
 		compatibility.append({
 			"title": "Named Unity prefabs",
 			"status": "supported",
-			"detail": "%s supported static prefabs import as named Godot scenes." % inventory.get("supported_static_prefabs", 0),
+			"detail": "%s semantic prefabs were generated as named Godot scenes in this import run." % generated_prefabs,
 			"next": "Use the generated prefab scene folders to place named plants, props, struct pieces, and player assets.",
 		})
 		compatibility.append({
@@ -537,12 +568,27 @@ func _build_compatibility(inventory: Dictionary) -> Array:
 			"detail": "%s prefabs preserve trigger/script metadata but do not recreate Unity runtime behaviors." % inventory.get("manual_behavior_prefabs", 0),
 			"next": "Read the compatibility report and use the preserved metadata when rebuilding stairs, player control, or animation logic in Godot.",
 		})
+	elif inventory.get("semantic_available", false):
+		compatibility.append({
+			"title": "Named Unity prefabs",
+			"status": "manual",
+			"detail": "Semantic prefab import is available for this source, but it was disabled in this run.",
+			"next": "Enable named semantic prefab scenes if you want prefab-level Godot scenes instead of fallback atlas collections.",
+		})
 	else:
 		compatibility.append({
 			"title": "Named Unity prefabs",
 			"status": "manual",
 			"detail": "Semantic prefab import is unavailable without a .unitypackage or extracted Unity metadata source.",
 			"next": "Supply the Basic .unitypackage or an extracted Unity project folder to import named prefab scenes.",
+		})
+
+	if int(inventory.get("editor_only_prefabs", 0)) > 0:
+		compatibility.append({
+			"title": "Unity editor-only prefabs",
+			"status": "manual",
+			"detail": "%s Unity editor-only prefabs were detected and excluded from semantic prefab scene generation." % inventory.get("editor_only_prefabs", 0),
+			"next": "Ignore these Unity editor artifacts for normal map authoring and use the generated TileSets instead.",
 		})
 
 	compatibility.append({
@@ -710,6 +756,9 @@ func _generate_tileset(spec: Dictionary, copied_res_paths: Dictionary) -> Dictio
 func _generate_semantic_prefab_collections(semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
 	var paths := []
 	var catalog_entries := []
+	var catalog_prefabs := []
+	var prefab_entries := []
+	var editor_only_entries := []
 	var family_to_paths := {
 		"plants": [],
 		"props": [],
@@ -735,21 +784,49 @@ func _generate_semantic_prefab_collections(semantic_registry: Dictionary, copied
 	for prefab_variant in semantic_registry.get("prefabs", []):
 		var prefab: Dictionary = prefab_variant
 		var tier := str(prefab.get("support_tier", "unresolved_or_skipped"))
-		if tier_counts.has(tier):
-			tier_counts[tier] += 1
+		var actual_tier := tier
+		var scene_path = null
+		var report_reasons: Array = Array(prefab.get("reason_tokens", [])).duplicate()
+		var report_details: Dictionary = Dictionary(prefab.get("report_details", {})).duplicate(true)
+		var next_step := str(prefab.get("next_step", ""))
+		var family := str(prefab.get("family", "props"))
+		if tier != "unresolved_or_skipped":
+			var scene_result := _generate_semantic_prefab_scene(prefab, sprites, texture_res_paths_by_guid)
+			if scene_result.get("ok", false):
+				scene_path = scene_result.get("path", "")
+				paths.append(scene_path)
+				family_to_paths[family].append(scene_path)
+				catalog_prefabs.append({
+					"prefab_name": str(prefab.get("name", "")),
+					"family": family,
+					"origin": "semantic_prefab",
+					"path": scene_path,
+					"tier": actual_tier,
+				})
+			else:
+				actual_tier = "unresolved_or_skipped"
+				report_reasons.append("scene_generation_failed")
+				report_details["scene_generation_error"] = str(scene_result.get("error", "Unknown semantic scene generation failure"))
+				next_step = "Inspect the importer error and repair the semantic mapping or use fallback atlas scenes for this asset."
+		if tier_counts.has(actual_tier):
+			tier_counts[actual_tier] += 1
 		else:
 			tier_counts["unresolved_or_skipped"] += 1
+		prefab_entries.append(_semantic_prefab_report_entry(prefab, actual_tier, scene_path, report_reasons, report_details, next_step))
 
-		if tier == "unresolved_or_skipped":
-			continue
-
-		var scene_result := _generate_semantic_prefab_scene(prefab, sprites, texture_res_paths_by_guid)
-		if not scene_result.get("ok", false):
-			tier_counts["unresolved_or_skipped"] += 1
-			continue
-		var family := str(prefab.get("family", "props"))
-		paths.append(scene_result.get("path", ""))
-		family_to_paths[family].append(scene_result.get("path", ""))
+	for prefab_variant in semantic_registry.get("editor_only_prefabs", []):
+		var prefab: Dictionary = prefab_variant
+		var report_reasons: Array = Array(prefab.get("reason_tokens", [])).duplicate()
+		if not report_reasons.has("editor_only_unity_asset"):
+			report_reasons.append("editor_only_unity_asset")
+		editor_only_entries.append(_semantic_prefab_report_entry(
+			prefab,
+			"editor_only",
+			null,
+			report_reasons,
+			Dictionary(prefab.get("report_details", {})).duplicate(true),
+			"Ignore this Unity editor asset for normal map authoring and use the generated TileSets instead."
+		))
 
 	var families := ["plants", "props", "struct", "player"]
 	for family in families:
@@ -767,8 +844,25 @@ func _generate_semantic_prefab_collections(semantic_registry: Dictionary, copied
 		"ok": true,
 		"paths": paths,
 		"catalog_entries": catalog_entries,
+		"catalog_prefabs": catalog_prefabs,
 		"family_to_paths": family_to_paths,
 		"tier_counts": tier_counts,
+		"prefab_entries": prefab_entries,
+		"editor_only_entries": editor_only_entries,
+	}
+
+
+func _semantic_prefab_report_entry(prefab: Dictionary, actual_tier: String, scene_path, reasons: Array, details: Dictionary, next_step: String) -> Dictionary:
+	return {
+		"prefab_name": str(prefab.get("name", "")),
+		"unity_asset_path": str(prefab.get("path", "")),
+		"family": str(prefab.get("family", "props")),
+		"tier": actual_tier,
+		"scene_path": scene_path,
+		"reasons": reasons,
+		"details": details,
+		"behavior_hints": prefab.get("behavior_hints", []),
+		"next_step": next_step,
 	}
 
 
@@ -827,6 +921,9 @@ func _build_semantic_prefab_root(prefab: Dictionary, sprites: Dictionary, textur
 			var root_id := str(root_id_variant)
 			if nodes.has(root_id):
 				root_node.add_child(_build_game_object_subtree(nodes[root_id], nodes, sprites, texture_res_paths_by_guid))
+
+	if not Array(prefab.get("behavior_hints", [])).is_empty():
+		root_node.set_meta("cainos_behavior_hints", prefab.get("behavior_hints", []))
 
 	return root_node
 
@@ -909,6 +1006,8 @@ func _apply_game_object_to_node(node: Node2D, node_desc: Dictionary, scene_root:
 
 	if not node_desc.get("mono_behaviours", []).is_empty():
 		node.set_meta("unity_mono_behaviours", node_desc.get("mono_behaviours", []))
+	if not node_desc.get("behavior_hints", []).is_empty():
+		node.set_meta("cainos_behavior_hints", node_desc.get("behavior_hints", []))
 
 
 func _node_pixels_per_unit(node_desc: Dictionary, sprites: Dictionary) -> float:
@@ -1265,17 +1364,18 @@ func _make_tile_layer(name: String, tileset: TileSet, z_index: int) -> TileMapLa
 func _write_reports(output_root: String, manifest: Dictionary, compatibility: Array, catalog: Dictionary) -> Dictionary:
 	var reports_root := output_root.path_join("reports")
 	_ensure_dir(ProjectSettings.globalize_path(reports_root))
+	var compatibility_report := _compatibility_report_data(manifest, compatibility, catalog)
 
 	var manifest_path := reports_root.path_join("import_manifest.json")
 	if _write_text_file(manifest_path, JSON.stringify(manifest, "\t", true)) != OK:
 		return {"ok": false, "error": "Could not write manifest."}
 
 	var compatibility_json := reports_root.path_join("compatibility_report.json")
-	if _write_text_file(compatibility_json, JSON.stringify(compatibility, "\t", true)) != OK:
+	if _write_text_file(compatibility_json, JSON.stringify(compatibility_report, "\t", true)) != OK:
 		return {"ok": false, "error": "Could not write compatibility report JSON."}
 
 	var compatibility_md := reports_root.path_join("compatibility_report.md")
-	if _write_text_file(compatibility_md, _compatibility_markdown(compatibility)) != OK:
+	if _write_text_file(compatibility_md, _compatibility_markdown(compatibility_report)) != OK:
 		return {"ok": false, "error": "Could not write compatibility report markdown."}
 
 	var catalog_json := reports_root.path_join("asset_catalog.json")
@@ -1295,24 +1395,133 @@ func _write_reports(output_root: String, manifest: Dictionary, compatibility: Ar
 	}
 
 
-func _compatibility_markdown(compatibility: Array) -> String:
+func _compatibility_report_data(manifest: Dictionary, legacy_summary: Array, catalog: Dictionary) -> Dictionary:
+	var prefabs: Array = manifest.get("semantic_prefabs", [])
+	var editor_only_prefabs: Array = manifest.get("editor_only_prefabs", [])
+	var tiers := {
+		"supported_static": [],
+		"approximated": [],
+		"manual_behavior": [],
+		"unresolved_or_skipped": [],
+	}
+	for entry_variant in prefabs:
+		var entry: Dictionary = entry_variant
+		var tier := str(entry.get("tier", "unresolved_or_skipped"))
+		if not tiers.has(tier):
+			tier = "unresolved_or_skipped"
+		var tier_entries: Array = tiers.get(tier, [])
+		tier_entries.append(entry)
+		tiers[tier] = tier_entries
+	return {
+		"format_version": REPORT_FORMAT_VERSION,
+		"pack_id": manifest.get("pack_id", PACK_ID),
+		"status_legend": {
+			"supported": "imported directly into usable Godot assets",
+			"approximated": "usable, but not a one-to-one Unity mapping",
+			"manual": "requires user follow-up in Godot",
+			"unsupported": "not converted in this milestone",
+		},
+		"summary": {
+			"semantic_available": manifest.get("inventory", {}).get("semantic_available", false),
+			"semantic_enabled": manifest.get("profile", {}).get("prefer_semantic_prefabs", true),
+			"semantic_prefab_count": prefabs.size(),
+			"supported_static_prefabs": manifest.get("semantic_summary", {}).get("supported_static", 0),
+			"approximated_prefabs": manifest.get("semantic_summary", {}).get("approximated", 0),
+			"manual_behavior_prefabs": manifest.get("semantic_summary", {}).get("manual_behavior", 0),
+			"unresolved_or_skipped_prefabs": manifest.get("semantic_summary", {}).get("unresolved_or_skipped", 0),
+			"editor_only_prefabs": editor_only_prefabs.size(),
+			"fallback_collections": len(catalog.get("fallback_collections", [])),
+		},
+		"legacy_summary": legacy_summary,
+		"tiers": tiers,
+		"editor_only_prefabs": editor_only_prefabs,
+		"fallback_collections": catalog.get("fallback_collections", []),
+	}
+
+
+func _compatibility_markdown(compatibility_report: Dictionary) -> String:
 	var lines := [
 		"# Cainos Basic Compatibility Report",
 		"",
 		"Generated by the Cainos Basic Importer. Status values:",
-		"- supported: imported directly into usable Godot assets",
-		"- approximated: usable, but not a one-to-one Unity mapping",
-		"- manual: requires user follow-up in Godot",
-		"- unsupported: not converted in this milestone",
+		"- supported: %s" % compatibility_report.get("status_legend", {}).get("supported", ""),
+		"- approximated: %s" % compatibility_report.get("status_legend", {}).get("approximated", ""),
+		"- manual: %s" % compatibility_report.get("status_legend", {}).get("manual", ""),
+		"- unsupported: %s" % compatibility_report.get("status_legend", {}).get("unsupported", ""),
 		"",
 	]
-	for item_variant in compatibility:
+	var summary: Dictionary = compatibility_report.get("summary", {})
+	lines.append("## Summary")
+	lines.append("- Semantic available: %s" % str(summary.get("semantic_available", false)))
+	lines.append("- Semantic enabled in this run: %s" % str(summary.get("semantic_enabled", true)))
+	lines.append("- Supported static prefabs: %s" % str(summary.get("supported_static_prefabs", 0)))
+	lines.append("- Approximated prefabs: %s" % str(summary.get("approximated_prefabs", 0)))
+	lines.append("- Manual behavior prefabs: %s" % str(summary.get("manual_behavior_prefabs", 0)))
+	lines.append("- Unresolved or skipped prefabs: %s" % str(summary.get("unresolved_or_skipped_prefabs", 0)))
+	lines.append("- Unity editor-only prefabs: %s" % str(summary.get("editor_only_prefabs", 0)))
+	lines.append("- Fallback collections: %s" % str(summary.get("fallback_collections", 0)))
+	lines.append("")
+	lines.append("## Legacy Summary")
+	for item_variant in compatibility_report.get("legacy_summary", []):
 		var item: Dictionary = item_variant
-		lines.append("## %s" % item.get("title", ""))
+		lines.append("### %s" % item.get("title", ""))
 		lines.append("- Status: %s" % item.get("status", ""))
 		lines.append("- Detail: %s" % item.get("detail", ""))
 		lines.append("- Next: %s" % item.get("next", ""))
 		lines.append("")
+	var tier_titles := {
+		"supported_static": "Supported Static Prefabs",
+		"approximated": "Approximated Prefabs",
+		"manual_behavior": "Manual Behavior Prefabs",
+		"unresolved_or_skipped": "Unresolved Or Skipped Prefabs",
+	}
+	for tier_key in ["supported_static", "approximated", "manual_behavior", "unresolved_or_skipped"]:
+		var tier_entries: Array = compatibility_report.get("tiers", {}).get(tier_key, [])
+		lines.append("## %s (%d)" % [tier_titles.get(tier_key, tier_key), tier_entries.size()])
+		if tier_entries.is_empty():
+			lines.append("- None")
+			lines.append("")
+			continue
+		for entry_variant in tier_entries:
+			var entry: Dictionary = entry_variant
+			var scene_path = entry.get("scene_path", null)
+			var scene_path_text := "(no scene generated)" if scene_path == null else str(scene_path)
+			var reasons_text := _join_reason_tokens(entry.get("reasons", []))
+			var detail_text := _prefab_detail_summary(entry.get("details", {}))
+			lines.append("- %s [%s] -> %s | reasons: %s | next: %s%s" % [
+				entry.get("prefab_name", ""),
+				entry.get("family", ""),
+				scene_path_text,
+				reasons_text,
+				entry.get("next_step", ""),
+				"" if detail_text.is_empty() else " | details: %s" % detail_text
+			])
+		lines.append("")
+	var editor_only_prefabs: Array = compatibility_report.get("editor_only_prefabs", [])
+	lines.append("## Unity Editor-Only Assets (%d)" % editor_only_prefabs.size())
+	if editor_only_prefabs.is_empty():
+		lines.append("- None")
+	else:
+		for entry_variant in editor_only_prefabs:
+			var entry: Dictionary = entry_variant
+			var reasons_text := _join_reason_tokens(entry.get("reasons", []))
+			var detail_text := _prefab_detail_summary(entry.get("details", {}))
+			lines.append("- %s -> %s | reasons: %s | next: %s%s" % [
+				entry.get("prefab_name", ""),
+				entry.get("unity_asset_path", ""),
+				reasons_text,
+				entry.get("next_step", ""),
+				"" if detail_text.is_empty() else " | details: %s" % detail_text
+			])
+	lines.append("")
+	var fallback_collections: Array = compatibility_report.get("fallback_collections", [])
+	lines.append("## Fallback Collections (%d)" % fallback_collections.size())
+	if fallback_collections.is_empty():
+		lines.append("- None")
+	else:
+		for entry_variant in fallback_collections:
+			var entry: Dictionary = entry_variant
+			lines.append("- %s: %s (%s items)" % [entry.get("name", ""), entry.get("path", ""), entry.get("count", 0)])
 	return "\n".join(lines)
 
 
@@ -1331,11 +1540,43 @@ func _catalog_markdown(catalog: Dictionary) -> String:
 		var collection: Dictionary = collection_variant
 		lines.append("- %s: %s (%s items, origin=%s)" % [collection.get("name", ""), collection.get("path", ""), collection.get("count", 0), collection.get("origin", "")])
 	lines.append("")
+	lines.append("## Prefabs")
+	for prefab_variant in catalog.get("prefabs", []):
+		var prefab: Dictionary = prefab_variant
+		lines.append("- %s [%s, tier=%s, origin=%s]: %s" % [prefab.get("prefab_name", ""), prefab.get("family", ""), prefab.get("tier", ""), prefab.get("origin", ""), prefab.get("path", "")])
+	lines.append("")
 	lines.append("## Helper Scenes")
 	for helper_variant in catalog.get("helper_scenes", []):
 		var helper: Dictionary = helper_variant
 		lines.append("- %s: %s" % [helper.get("name", ""), helper.get("path", "")])
+	lines.append("")
+	lines.append("## Fallback Collections")
+	for collection_variant in catalog.get("fallback_collections", []):
+		var collection: Dictionary = collection_variant
+		lines.append("- %s: %s (%s items)" % [collection.get("name", ""), collection.get("path", ""), collection.get("count", 0)])
 	return "\n".join(lines)
+
+
+func _join_reason_tokens(tokens: Array) -> String:
+	if tokens.is_empty():
+		return "none"
+	var pieces := []
+	for token_variant in tokens:
+		pieces.append(str(token_variant))
+	return ", ".join(pieces)
+
+
+func _prefab_detail_summary(details: Dictionary) -> String:
+	var parts := []
+	if details.has("unresolved_sprite_refs"):
+		parts.append("missing sprites=%s" % ", ".join(details.get("unresolved_sprite_refs", [])))
+	if details.has("behavior_kinds"):
+		parts.append("behavior=%s" % ", ".join(details.get("behavior_kinds", [])))
+	if details.has("complex_edge_collider_count"):
+		parts.append("complex edge colliders=%s" % str(details.get("complex_edge_collider_count", 0)))
+	if details.has("unsupported_components"):
+		parts.append("unsupported=%s" % ", ".join(details.get("unsupported_components", [])))
+	return "; ".join(parts)
 
 
 func _wait_for_import(resource_paths: Array) -> void:

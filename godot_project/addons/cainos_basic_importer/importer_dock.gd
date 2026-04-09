@@ -224,4 +224,7 @@ func _run(mode: String) -> void:
 	var report_path := str(result.get("report_path", ""))
 	if not report_path.is_empty():
 		_append_log("Report: %s" % report_path)
+	var catalog_path := str(result.get("catalog_path", ""))
+	if not catalog_path.is_empty():
+		_append_log("Catalog: %s" % catalog_path)
 	_append_log("--- %s complete ---" % mode.capitalize())

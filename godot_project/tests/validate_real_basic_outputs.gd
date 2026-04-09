@@ -9,9 +9,12 @@ func _init() -> void:
 
 	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_preview_map.tscn"), "basic_preview_map", true)
 	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_prefab_catalog.tscn"), "basic_prefab_catalog", false)
+	_validate_report_files(output_root)
 	_validate_bush_prefab(output_root)
 	_validate_lantern_prefab(output_root)
 	_validate_stairs_prefab(output_root)
+	_validate_altar_prefab(output_root)
+	_validate_rune_prefab(output_root)
 	_validate_player_prefab(output_root)
 
 	_finish()
@@ -73,11 +76,36 @@ func _validate_stairs_prefab(output_root: String) -> void:
 	var root := _instantiate_prefab(output_root, "struct", "PF Struct - Stairs S 01 L")
 	if root == null:
 		return
-	var behaviour_node := _find_first_node_with_meta(root, "unity_mono_behaviours")
-	_assert_true(behaviour_node != null, "Stairs prefab preserves deferred MonoBehaviour metadata")
+	_assert_true(not _behavior_hints_for(root, "stairs_layer_trigger").is_empty(), "Stairs prefab exposes stairs_layer_trigger behavior hint")
+	var behaviour_node := root.find_child("Stairs Layer Trigger", true, false)
+	_assert_true(behaviour_node != null, "Stairs prefab keeps trigger helper node")
 	if behaviour_node != null:
-		var behaviours: Variant = behaviour_node.get_meta("unity_mono_behaviours")
-		_assert_true(behaviours is Array and not behaviours.is_empty(), "Stairs MonoBehaviour metadata is non-empty")
+		_assert_true(behaviour_node.has_meta("unity_mono_behaviours"), "Stairs prefab preserves deferred MonoBehaviour metadata")
+		_assert_true(not _behavior_hints_for(behaviour_node, "stairs_layer_trigger").is_empty(), "Stairs trigger node keeps local behavior hint")
+	root.free()
+
+
+func _validate_altar_prefab(output_root: String) -> void:
+	var root := _instantiate_prefab(output_root, "props", "PF Props - Altar 01")
+	if root == null:
+		return
+	var hints := _behavior_hints_for(root, "altar_trigger")
+	_assert_true(not hints.is_empty(), "Altar prefab exposes altar_trigger behavior hint")
+	if not hints.is_empty():
+		var data: Dictionary = hints[0].get("data", {})
+		_assert_true(Array(data.get("rune_node_paths", [])).size() >= 1, "Altar behavior hint preserves rune node paths")
+	root.free()
+
+
+func _validate_rune_prefab(output_root: String) -> void:
+	var root := _instantiate_prefab(output_root, "props", "PF Props - Rune Pillar X2")
+	if root == null:
+		return
+	_assert_true(not _behavior_hints_for(root, "sprite_color_animation").is_empty(), "Rune pillar exposes sprite_color_animation behavior hint")
+	var glow := root.find_child("Glow", true, false)
+	_assert_true(glow != null, "Rune pillar keeps Glow node")
+	if glow != null:
+		_assert_true(not _behavior_hints_for(glow, "sprite_color_animation").is_empty(), "Glow node keeps local sprite_color_animation hint")
 	root.free()
 
 
@@ -86,7 +114,47 @@ func _validate_player_prefab(output_root: String) -> void:
 	if root == null:
 		return
 	_assert_true(_find_first_sprite(root) != null, "Player prefab includes a Sprite2D descendant")
+	_assert_true(not _behavior_hints_for(root, "top_down_character_controller").is_empty(), "Player prefab exposes top_down_character_controller behavior hint")
 	root.free()
+
+
+func _validate_report_files(output_root: String) -> void:
+	var compatibility_report = _load_json_file(output_root.path_join("reports/compatibility_report.json"))
+	_assert_true(compatibility_report is Dictionary, "Compatibility report JSON loads")
+	if compatibility_report is Dictionary:
+		_assert_eq(int(compatibility_report.get("format_version", -1)), 3, "Compatibility report format_version")
+		var summary: Dictionary = compatibility_report.get("summary", {})
+		_assert_eq(int(summary.get("supported_static_prefabs", -1)), 51, "Compatibility report supported count")
+		_assert_eq(int(summary.get("approximated_prefabs", -1)), 13, "Compatibility report approximated count")
+		_assert_eq(int(summary.get("manual_behavior_prefabs", -1)), 10, "Compatibility report manual count")
+		_assert_eq(int(summary.get("unresolved_or_skipped_prefabs", -1)), 4, "Compatibility report unresolved count")
+		_assert_eq(int(summary.get("editor_only_prefabs", -1)), 3, "Compatibility report editor-only count")
+		var stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Struct - Stairs S 01 L")
+		_assert_true(not stairs_entry.is_empty(), "Compatibility report includes stairs entry")
+		_assert_eq(str(stairs_entry.get("tier", "")), "manual_behavior", "Compatibility report stairs tier")
+		_assert_true(Array(stairs_entry.get("reasons", [])).has("stairs_layer_trigger_hint"), "Compatibility report stairs reason")
+		var well_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Props - Well 01")
+		_assert_true(not well_entry.is_empty(), "Compatibility report includes approximated real-pack sample")
+		_assert_eq(str(well_entry.get("tier", "")), "approximated", "Compatibility report well tier")
+		_assert_true(Array(well_entry.get("reasons", [])).has("polygon_collider_deferred"), "Compatibility report well reason")
+		var east_stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Struct - Stairs E 01")
+		_assert_true(not east_stairs_entry.is_empty(), "Compatibility report includes unresolved east stairs entry")
+		_assert_true(Array(east_stairs_entry.get("behavior_hints", [])).size() > 0, "Unresolved stairs still preserve behavior hints in report data")
+		var editor_only_prefabs: Array = compatibility_report.get("editor_only_prefabs", [])
+		_assert_true(not _find_catalog_prefab_entry(editor_only_prefabs, "TP Grass").is_empty(), "Compatibility report includes TP Grass as editor-only")
+		_assert_true(_find_tier_prefab_entry(compatibility_report.get("tiers", {}), "TP Grass").is_empty(), "Editor-only tile palette is excluded from semantic tiers")
+
+	var asset_catalog = _load_json_file(output_root.path_join("reports/asset_catalog.json"))
+	_assert_true(asset_catalog is Dictionary, "Asset catalog JSON loads")
+	if asset_catalog is Dictionary:
+		_assert_eq(int(asset_catalog.get("format_version", -1)), 3, "Asset catalog format_version")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Plant - Bush 01").is_empty(), "Asset catalog includes Bush prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Stone Lantern 01").is_empty(), "Asset catalog includes Stone Lantern prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs S 01 L").is_empty(), "Asset catalog includes Stairs prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Altar 01").is_empty(), "Asset catalog includes Altar prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Rune Pillar X2").is_empty(), "Asset catalog includes Rune Pillar prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Player").is_empty(), "Asset catalog includes Player prefab")
+		_assert_true(_find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "TP Grass").is_empty(), "Asset catalog omits editor-only tile palette prefab")
 
 
 func _instantiate_prefab(output_root: String, family: String, prefab_name: String) -> Node:
@@ -127,6 +195,37 @@ func _find_first_node_with_meta(node: Node, meta_key: String) -> Node:
 	return null
 
 
+func _behavior_hints_for(node: Node, expected_kind: String) -> Array:
+	if not node.has_meta("cainos_behavior_hints"):
+		return []
+	var hints: Variant = node.get_meta("cainos_behavior_hints")
+	if not (hints is Array):
+		return []
+	var matches := []
+	for hint_variant in hints:
+		var hint: Dictionary = hint_variant
+		if str(hint.get("kind", "")) == expected_kind:
+			matches.append(hint)
+	return matches
+
+
+func _find_tier_prefab_entry(tiers: Dictionary, prefab_name: String) -> Dictionary:
+	for tier_entries_variant in tiers.values():
+		for entry_variant in tier_entries_variant:
+			var entry: Dictionary = entry_variant
+			if str(entry.get("prefab_name", "")) == prefab_name:
+				return entry
+	return {}
+
+
+func _find_catalog_prefab_entry(entries: Array, prefab_name: String) -> Dictionary:
+	for entry_variant in entries:
+		var entry: Dictionary = entry_variant
+		if str(entry.get("prefab_name", "")) == prefab_name:
+			return entry
+	return {}
+
+
 func _count_tile_map_layers(node: Node) -> int:
 	var count := 0
 	if node is TileMapLayer:
@@ -138,6 +237,13 @@ func _count_tile_map_layers(node: Node) -> int:
 
 func _sanitize_filename(value: String) -> String:
 	return value.replace("/", "-").replace("\\", "-").replace(":", "").replace("*", "").replace("?", "").replace("\"", "").replace("<", "").replace(">", "").replace("|", "")
+
+
+func _load_json_file(res_path: String):
+	var abs_path := ProjectSettings.globalize_path(res_path)
+	if not FileAccess.file_exists(abs_path):
+		return null
+	return JSON.parse_string(FileAccess.get_file_as_string(abs_path))
 
 
 func _assert_true(condition: bool, message: String) -> void:

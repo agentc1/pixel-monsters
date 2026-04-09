@@ -26,13 +26,20 @@ GUIDS = {
     "shadow_props": "88888888888888888888888888888888",
     "shadow_plants": "99999999999999999999999999999999",
     "stairs_script": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "color_script": "abababababababababababababababab",
+    "altar_script": "acacacacacacacacacacacacacacacac",
+    "controller_script": "adadadadadadadadadadadadadadadad",
     "prefab_bush": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "prefab_lantern": "cccccccccccccccccccccccccccccccc",
     "prefab_edge": "dddddddddddddddddddddddddddddddd",
+    "prefab_complex_edge": "abcdabcdabcdabcdabcdabcdabcdabcd",
     "prefab_stairs": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "prefab_altar": "ababcdcdababcdcdababcdcdababcdcd",
+    "prefab_rune": "cdcdababcdcdababcdcdababcdcdabab",
     "prefab_polygon": "ffffffffffffffffffffffffffffffff",
     "prefab_broken": "12341234123412341234123412341234",
     "prefab_player": "56785678567856785678567856785678",
+    "prefab_tile_palette": "99990000111122223333444455556666",
 }
 
 SPRITES = {
@@ -44,6 +51,10 @@ SPRITES = {
     "edge": {"name": "TX Struct Edge", "file_id": "6100000000000000006", "rect": (32, 0, 32, 16), "pivot": (0.5, 0.5)},
     "player": {"name": "TX Player Idle", "file_id": "6100000000000000007", "rect": (0, 0, 24, 32), "pivot": (0.5, 0.0)},
     "polygon_prop": {"name": "TX Props Polygon", "file_id": "6100000000000000008", "rect": (32, 0, 24, 24), "pivot": (0.5, 0.5)},
+    "altar": {"name": "TX Props Altar", "file_id": "6100000000000000009", "rect": (64, 0, 32, 32), "pivot": (0.5, 0.5)},
+    "altar_rune": {"name": "TX Props Altar Rune", "file_id": "6100000000000000010", "rect": (96, 0, 8, 8), "pivot": (0.5, 0.5)},
+    "rune_pillar": {"name": "TX Props Rune Pillar", "file_id": "6100000000000000011", "rect": (64, 32, 16, 32), "pivot": (0.5, 0.5)},
+    "rune_glow": {"name": "TX Props Rune Glow", "file_id": "6100000000000000012", "rect": (80, 32, 8, 24), "pivot": (0.5, 0.5)},
 }
 
 
@@ -72,23 +83,28 @@ def main() -> None:
         "extracted_a": str(extracted_a),
         "extracted_b": str(extracted_b),
         "expected": {
-            "prefab_count": 7,
-            "supported_static_prefabs": 4,
-            "approximated_prefabs": 1,
-            "manual_behavior_prefabs": 1,
+            "prefab_count": 10,
+            "supported_static_prefabs": 3,
+            "approximated_prefabs": 2,
+            "manual_behavior_prefabs": 4,
             "unresolved_or_skipped_prefabs": 1,
+            "editor_only_prefabs": 1,
             "sample_prefabs": {
                 "bush": "PF Plant - Bush 01",
                 "lantern": "PF Props - Stone Lantern 01",
                 "stairs": "PF Struct - Stairs S 01 L",
+                "altar": "PF Props - Altar 01",
+                "rune": "PF Props - Rune Pillar X2",
                 "player": "PF Player",
                 "edge": "PF Struct - Z Edge 01",
+                "complex_edge": "PF Struct - Z Edge Complex 01",
                 "polygon": "PF Props - Z Polygon 01",
                 "broken": "PF Props - Z Broken 01",
+                "editor_only": "TP Grass",
             },
-            "lantern_box_size_px": [16.0, 24.0],
-            "edge_segment_px": [[-16.0, 0.0], [16.0, 0.0]],
-            "bush_shadow_position_px": [8.0, 4.0],
+            "lantern_box_size": [16.0, 24.0],
+            "edge_segment": {"a": [-16.0, 0.0], "b": [16.0, 0.0]},
+            "bush_shadow_position": [8.0, 4.0],
         },
     }
     (root / "fixture_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -157,14 +173,18 @@ def build_asset_map():
         assets,
         "props",
         f"{TEXTURE_ROOT}/TX Props.png",
-        96,
+        128,
         64,
         [
             (0, 0, 19, 27, (195, 151, 85, 255)),
             (32, 0, 55, 23, (138, 101, 71, 255)),
             (64, 0, 79, 15, (176, 120, 72, 255)),
+            (64, 16, 95, 47, (108, 82, 59, 255)),
+            (96, 0, 103, 7, (69, 211, 255, 255)),
+            (64, 32, 79, 63, (120, 90, 176, 255)),
+            (80, 32, 87, 55, (122, 237, 255, 255)),
         ],
-        [SPRITES["lantern"], SPRITES["polygon_prop"]],
+        [SPRITES["lantern"], SPRITES["polygon_prop"], SPRITES["altar"], SPRITES["altar_rune"], SPRITES["rune_pillar"], SPRITES["rune_glow"]],
     )
     add_texture(
         assets,
@@ -210,14 +230,39 @@ def build_asset_map():
         "public class StairsLayerTrigger {}\n",
         simple_meta(GUIDS["stairs_script"]),
     )
+    add_text_asset(
+        assets,
+        GUIDS["color_script"],
+        f"{SCRIPT_ROOT}/SpriteColorAnimation.cs",
+        "public class SpriteColorAnimation {}\n",
+        simple_meta(GUIDS["color_script"]),
+    )
+    add_text_asset(
+        assets,
+        GUIDS["altar_script"],
+        f"{SCRIPT_ROOT}/PropsAltar.cs",
+        "public class PropsAltar {}\n",
+        simple_meta(GUIDS["altar_script"]),
+    )
+    add_text_asset(
+        assets,
+        GUIDS["controller_script"],
+        f"{SCRIPT_ROOT}/TopDownCharacterController.cs",
+        "public class TopDownCharacterController {}\n",
+        simple_meta(GUIDS["controller_script"]),
+    )
 
     add_prefab(assets, GUIDS["prefab_bush"], f"{PREFAB_ROOT}/Plant/PF Plant - Bush 01.prefab", bush_prefab())
     add_prefab(assets, GUIDS["prefab_lantern"], f"{PREFAB_ROOT}/Props/PF Props - Stone Lantern 01.prefab", lantern_prefab())
     add_prefab(assets, GUIDS["prefab_edge"], f"{PREFAB_ROOT}/Struct/PF Struct - Z Edge 01.prefab", edge_prefab())
+    add_prefab(assets, GUIDS["prefab_complex_edge"], f"{PREFAB_ROOT}/Struct/PF Struct - Z Edge Complex 01.prefab", complex_edge_prefab())
     add_prefab(assets, GUIDS["prefab_stairs"], f"{PREFAB_ROOT}/Struct/PF Struct - Stairs S 01 L.prefab", stairs_prefab())
+    add_prefab(assets, GUIDS["prefab_altar"], f"{PREFAB_ROOT}/Props/PF Props - Altar 01.prefab", altar_prefab())
+    add_prefab(assets, GUIDS["prefab_rune"], f"{PREFAB_ROOT}/Props/PF Props - Rune Pillar X2.prefab", rune_pillar_prefab())
     add_prefab(assets, GUIDS["prefab_polygon"], f"{PREFAB_ROOT}/Props/PF Props - Z Polygon 01.prefab", polygon_prefab())
     add_prefab(assets, GUIDS["prefab_broken"], f"{PREFAB_ROOT}/Props/PF Props - Z Broken 01.prefab", broken_prefab())
     add_prefab(assets, GUIDS["prefab_player"], f"{PREFAB_ROOT}/Player/PF Player.prefab", player_prefab())
+    add_prefab(assets, GUIDS["prefab_tile_palette"], f"{PACK_ROOT}/Tile Palette/TP Grass.prefab", tile_palette_prefab())
     return assets
 
 
@@ -322,13 +367,98 @@ def edge_prefab():
     ) + "\n"
 
 
+def complex_edge_prefab():
+    return "\n".join(
+        [
+            game_object_doc("350100", "PF Struct - Z Edge Complex 01", ["350101", "350102", "350103"]),
+            transform_doc("350101", "350100", "0", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("350102", "350100", GUIDS["struct"], SPRITES["edge"]["file_id"], sorting_order=0),
+            edge_collider_doc("350103", "350100", (0.0, 0.0), [(-0.5, 0.0), (0.0, 0.25), (0.5, 0.0)]),
+        ]
+    ) + "\n"
+
+
 def stairs_prefab():
     return "\n".join(
         [
             game_object_doc("400100", "PF Struct - Stairs S 01 L", ["400101", "400102", "400103"]),
             transform_doc("400101", "400100", "0", [], (0.0, 0.0, 0.0)),
             sprite_renderer_doc("400102", "400100", GUIDS["struct"], SPRITES["stairs"]["file_id"], sorting_order=1),
-            mono_behaviour_doc("400103", "400100", GUIDS["stairs_script"], {"lowerLayer": 1, "upperLayer": 2}),
+            mono_behaviour_doc(
+                "400103",
+                "400100",
+                GUIDS["stairs_script"],
+                [
+                    "  direction: 1",
+                    "  layerUpper: Layer 2",
+                    "  sortingLayerUpper: Layer 2",
+                    "  layerLower: Layer 1",
+                    "  sortingLayerLower: Layer 1",
+                ],
+            ),
+        ]
+    ) + "\n"
+
+
+def altar_prefab():
+    return "\n".join(
+        [
+            game_object_doc("450100", "PF Props - Altar 01", ["450101", "450102", "450103", "450130"]),
+            transform_doc("450101", "450100", "0", ["450111", "450121"], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("450102", "450100", GUIDS["props"], SPRITES["altar"]["file_id"], sorting_order=1),
+            mono_behaviour_doc(
+                "450103",
+                "450100",
+                GUIDS["altar_script"],
+                [
+                    "  runes:",
+                    "  - {fileID: 450112}",
+                    "  - {fileID: 450122}",
+                    "  lerpSpeed: 3",
+                ],
+            ),
+            game_object_doc("450110", "Rune A", ["450111", "450112"]),
+            transform_doc("450111", "450110", "450101", [], (-0.25, 0.25, 0.0)),
+            sprite_renderer_doc("450112", "450110", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2),
+            game_object_doc("450120", "Rune B", ["450121", "450122"]),
+            transform_doc("450121", "450120", "450101", [], (0.25, 0.25, 0.0)),
+            sprite_renderer_doc("450122", "450120", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2),
+            box_collider_doc("450130", "450100", (0.0, 0.0), (0.75, 0.5)),
+        ]
+    ) + "\n"
+
+
+def rune_pillar_prefab():
+    return "\n".join(
+        [
+            game_object_doc("460100", "PF Props - Rune Pillar X2", ["460101", "460102", "460103"]),
+            transform_doc("460101", "460100", "0", ["460111"], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("460102", "460100", GUIDS["props"], SPRITES["rune_pillar"]["file_id"], sorting_order=2),
+            box_collider_doc("460103", "460100", (0.0, 0.0), (0.5, 1.0)),
+            game_object_doc("460110", "Glow", ["460111", "460112", "460113"]),
+            transform_doc("460111", "460110", "460101", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("460112", "460110", GUIDS["props"], SPRITES["rune_glow"]["file_id"], sorting_order=2),
+            mono_behaviour_doc(
+                "460113",
+                "460110",
+                GUIDS["color_script"],
+                [
+                    "  gradient:",
+                    "    serializedVersion: 2",
+                    "    key0: {r: 0, g: 0.8, b: 1, a: 1}",
+                    "    key1: {r: 0, g: 0.8, b: 1, a: 0.5}",
+                    "    key2: {r: 0, g: 0, b: 0, a: 0.2}",
+                    "    ctime0: 0",
+                    "    ctime1: 65535",
+                    "    atime0: 0",
+                    "    atime1: 32768",
+                    "    atime2: 65535",
+                    "    m_Mode: 0",
+                    "    m_NumColorKeys: 2",
+                    "    m_NumAlphaKeys: 3",
+                    "  time: 2",
+                ],
+            ),
         ]
     ) + "\n"
 
@@ -357,9 +487,37 @@ def broken_prefab():
 def player_prefab():
     return "\n".join(
         [
-            game_object_doc("700100", "PF Player", ["700101", "700102"]),
+            game_object_doc("700100", "PF Player", ["700101", "700102", "700103", "700104", "700105", "700106"]),
             transform_doc("700101", "700100", "0", [], (0.0, 0.0, 0.0)),
             sprite_renderer_doc("700102", "700100", GUIDS["player"], SPRITES["player"]["file_id"], sorting_order=0),
+            box_collider_doc("700103", "700100", (0.0, -0.25), (0.5, 0.75)),
+            rigidbody2d_doc("700104", "700100"),
+            animator_doc("700105", "700100"),
+            mono_behaviour_doc(
+                "700106",
+                "700100",
+                GUIDS["controller_script"],
+                [
+                    "  speed: 3",
+                ],
+            ),
+        ]
+    ) + "\n"
+
+
+def tile_palette_prefab():
+    return "\n".join(
+        [
+            game_object_doc("800100", "TP Grass", ["800101", "800102"]),
+            transform_doc("800101", "800100", "0", [], (0.0, 0.0, 0.0)),
+            mono_behaviour_doc(
+                "800102",
+                "800100",
+                "0000000000000000e000000000000000",
+                [
+                    "  cellSizing: 0",
+                ],
+            ),
         ]
     ) + "\n"
 
@@ -472,7 +630,7 @@ def edge_collider_doc(object_id, game_object_id, offset, points):
     return "\n".join(lines)
 
 
-def mono_behaviour_doc(object_id, game_object_id, script_guid, fields):
+def mono_behaviour_doc(object_id, game_object_id, script_guid, field_lines):
     lines = [
         f"--- !u!114 &{object_id}",
         "MonoBehaviour:",
@@ -486,8 +644,7 @@ def mono_behaviour_doc(object_id, game_object_id, script_guid, fields):
         "  m_Name: ",
         "  m_EditorClassIdentifier: ",
     ]
-    for key, value in fields.items():
-        lines.append(f"  {key}: {value}")
+    lines.extend(field_lines)
     return "\n".join(lines)
 
 
@@ -496,6 +653,36 @@ def polygon_collider_doc(object_id, game_object_id):
         [
             f"--- !u!60 &{object_id}",
             "PolygonCollider2D:",
+            "  m_ObjectHideFlags: 0",
+            "  m_CorrespondingSourceObject: {fileID: 0}",
+            "  m_PrefabInstance: {fileID: 0}",
+            "  m_PrefabAsset: {fileID: 0}",
+            f"  m_GameObject: {{fileID: {game_object_id}}}",
+            "  m_Enabled: 1",
+        ]
+    )
+
+
+def rigidbody2d_doc(object_id, game_object_id):
+    return "\n".join(
+        [
+            f"--- !u!50 &{object_id}",
+            "Rigidbody2D:",
+            "  m_ObjectHideFlags: 0",
+            "  m_CorrespondingSourceObject: {fileID: 0}",
+            "  m_PrefabInstance: {fileID: 0}",
+            "  m_PrefabAsset: {fileID: 0}",
+            f"  m_GameObject: {{fileID: {game_object_id}}}",
+            "  m_Enabled: 1",
+        ]
+    )
+
+
+def animator_doc(object_id, game_object_id):
+    return "\n".join(
+        [
+            f"--- !u!95 &{object_id}",
+            "Animator:",
             "  m_ObjectHideFlags: 0",
             "  m_CorrespondingSourceObject: {fileID: 0}",
             "  m_PrefabInstance: {fileID: 0}",

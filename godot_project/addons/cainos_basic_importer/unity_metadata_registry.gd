@@ -59,6 +59,7 @@ func _build_from_grouped_records(groups: Dictionary, source_kind: String, source
 	var textures_by_key = {}
 	var sprites = {}
 	var prefabs = []
+	var editor_only_prefabs = []
 	var asset_paths_by_guid = {}
 	var script_guid_to_path = {}
 
@@ -101,14 +102,19 @@ func _build_from_grouped_records(groups: Dictionary, source_kind: String, source
 		var prefab_text = PackedByteArray(group.get("asset_bytes", PackedByteArray())).get_string_from_utf8()
 		var prefab_result = _parse_prefab(asset_path, prefab_text, script_guid_to_path, sprites)
 		if prefab_result.get("ok", false):
-			prefabs.append(prefab_result)
+			if str(prefab_result.get("asset_scope", "semantic_prefab")) == "editor_only_prefab":
+				editor_only_prefabs.append(prefab_result)
+			else:
+				prefabs.append(prefab_result)
 
 	prefabs.sort_custom(_sort_prefab_paths)
+	editor_only_prefabs.sort_custom(_sort_prefab_paths)
 	var summary = {
 		"supported_static_prefabs": 0,
 		"approximated_prefabs": 0,
 		"manual_behavior_prefabs": 0,
 		"unresolved_or_skipped_prefabs": 0,
+		"editor_only_prefabs": editor_only_prefabs.size(),
 		"total_prefabs": prefabs.size(),
 	}
 	for prefab_variant in prefabs:
@@ -131,6 +137,7 @@ func _build_from_grouped_records(groups: Dictionary, source_kind: String, source
 		"textures_by_key": textures_by_key,
 		"sprites": sprites,
 		"prefabs": prefabs,
+		"editor_only_prefabs": editor_only_prefabs,
 		"asset_paths_by_guid": asset_paths_by_guid,
 		"script_guid_to_path": script_guid_to_path,
 		"summary": summary,
@@ -289,7 +296,8 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 					"raw_body": body,
 				}
 			"PolygonCollider2D", "Rigidbody2D", "Animator":
-				unsupported_components.append(document_class_name)
+				if not unsupported_components.has(document_class_name):
+					unsupported_components.append(document_class_name)
 
 	var transform_to_game_object := {}
 	for transform_id_variant in transforms.keys():
@@ -362,10 +370,13 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 
 	var root_ids := []
 	var unresolved_sprite_refs := []
+	var simple_edge_collider_count := 0
+	var complex_edge_collider_count := 0
 	var has_mono := not mono_behaviours.is_empty()
 	var has_polygon := unsupported_components.has("PolygonCollider2D")
 	var has_rigidbody := unsupported_components.has("Rigidbody2D")
 	var has_animator := unsupported_components.has("Animator")
+	var has_box_collider := not box_colliders.is_empty()
 
 	for node_id_variant in nodes.keys():
 		var node_id := str(node_id_variant)
@@ -378,26 +389,87 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 			if not sprites.has(sprite_key):
 				unresolved_sprite_refs.append(sprite_key)
 
+	for edge_variant in edge_colliders.values():
+		var edge: Dictionary = edge_variant
+		var points: Array = edge.get("points", [])
+		if points.size() == 2:
+			simple_edge_collider_count += 1
+		else:
+			complex_edge_collider_count += 1
+
 	root_ids.sort()
+	var scene_node_paths := _scene_node_paths_for_prefab(root_ids, nodes)
+	var renderer_node_paths := {}
+	var sorted_node_ids := nodes.keys()
+	sorted_node_ids.sort()
+	for node_id_variant in sorted_node_ids:
+		var node_id := str(node_id_variant)
+		var node_path := str(scene_node_paths.get(node_id, "."))
+		for renderer_variant in nodes[node_id].get("sprite_renderers", []):
+			var renderer: Dictionary = renderer_variant
+			renderer_node_paths[str(renderer.get("id", ""))] = node_path
+
+	var behavior_hints := []
+	for node_id_variant in sorted_node_ids:
+		var node_id := str(node_id_variant)
+		var node: Dictionary = nodes[node_id]
+		var node_hints := []
+		for mono_variant in node.get("mono_behaviours", []):
+			var mono: Dictionary = mono_variant
+			var hint := _normalize_behavior_hint(mono, str(scene_node_paths.get(node_id, ".")), renderer_node_paths)
+			if not hint.is_empty():
+				node_hints.append(hint)
+				behavior_hints.append(hint)
+		if not node_hints.is_empty():
+			node["behavior_hints"] = node_hints
+		nodes[node_id] = node
+
 	var support_tier := "supported_static"
+	var has_complex_edge := complex_edge_collider_count > 0
 	if not unresolved_sprite_refs.is_empty():
 		support_tier = "unresolved_or_skipped"
 	elif has_mono or has_animator:
 		support_tier = "manual_behavior"
-	elif has_polygon or has_rigidbody:
+	elif has_polygon or has_rigidbody or has_complex_edge:
 		support_tier = "approximated"
 
 	var display_name := asset_path.get_file().trim_suffix(".prefab")
+	var asset_scope := "semantic_prefab" if asset_path.contains("/Prefab/") else "editor_only_prefab"
+	var behavior_kinds := _behavior_kinds_from_hints(behavior_hints)
+	var reason_tokens := _prefab_reason_tokens(
+		has_box_collider,
+		simple_edge_collider_count,
+		complex_edge_collider_count,
+		unresolved_sprite_refs,
+		behavior_kinds,
+		has_mono,
+		has_animator,
+		has_polygon,
+		has_rigidbody
+	)
+	var report_details := _prefab_report_details(
+		unresolved_sprite_refs,
+		unsupported_components,
+		box_colliders.size(),
+		simple_edge_collider_count,
+		complex_edge_collider_count,
+		behavior_kinds
+	)
 	return {
 		"ok": true,
 		"path": asset_path,
 		"name": display_name,
 		"family": _family_from_prefab_path(asset_path, display_name),
+		"asset_scope": asset_scope,
 		"root_ids": root_ids,
 		"nodes": nodes,
 		"support_tier": support_tier,
 		"unsupported_components": unsupported_components,
 		"unresolved_sprite_refs": unresolved_sprite_refs,
+		"behavior_hints": behavior_hints,
+		"reason_tokens": reason_tokens,
+		"report_details": report_details,
+		"next_step": _prefab_next_step(support_tier, reason_tokens, behavior_kinds),
 	}
 
 
@@ -427,6 +499,236 @@ func _find_transform_for_game_object(game_object_id: String, transforms: Diction
 		if str(transform_data.get("game_object_id", "")) == game_object_id:
 			return transform_data
 	return {}
+
+
+func _scene_node_paths_for_prefab(root_ids: Array, nodes: Dictionary) -> Dictionary:
+	var paths := {}
+	if root_ids.size() == 1 and nodes.has(str(root_ids[0])):
+		var root_id := str(root_ids[0])
+		paths[root_id] = "."
+		for child_id_variant in nodes[root_id].get("children", []):
+			_assign_scene_node_paths(str(child_id_variant), "", nodes, paths)
+	else:
+		for root_id_variant in root_ids:
+			_assign_scene_node_paths(str(root_id_variant), "", nodes, paths)
+	return paths
+
+
+func _assign_scene_node_paths(node_id: String, parent_path: String, nodes: Dictionary, paths: Dictionary) -> void:
+	if not nodes.has(node_id):
+		return
+	var node: Dictionary = nodes[node_id]
+	var name := str(node.get("name", "Node"))
+	var path := name if parent_path.is_empty() else "%s/%s" % [parent_path, name]
+	paths[node_id] = path
+	for child_id_variant in node.get("children", []):
+		_assign_scene_node_paths(str(child_id_variant), path, nodes, paths)
+
+
+func _normalize_behavior_hint(mono: Dictionary, scene_node_path: String, renderer_node_paths: Dictionary) -> Dictionary:
+	var script_path := str(mono.get("script_path", ""))
+	var script_name := script_path.get_file().trim_suffix(".cs")
+	if script_name.is_empty():
+		return {}
+	var base_hint := {
+		"script_path": script_path,
+		"script_name": script_name,
+		"scene_node_path": scene_node_path,
+		"deferred_runtime": true,
+	}
+	match script_name:
+		"StairsLayerTrigger":
+			base_hint["kind"] = "stairs_layer_trigger"
+			base_hint["data"] = _stairs_behavior_data(mono)
+			return base_hint
+		"SpriteColorAnimation":
+			base_hint["kind"] = "sprite_color_animation"
+			base_hint["data"] = _sprite_color_animation_data(mono)
+			return base_hint
+		"PropsAltar":
+			base_hint["kind"] = "altar_trigger"
+			base_hint["data"] = _altar_behavior_data(mono, renderer_node_paths)
+			return base_hint
+		"TopDownCharacterController":
+			base_hint["kind"] = "top_down_character_controller"
+			base_hint["data"] = _top_down_controller_data(mono)
+			return base_hint
+		_:
+			return {}
+
+
+func _stairs_behavior_data(mono: Dictionary) -> Dictionary:
+	var fields: Dictionary = mono.get("fields", {})
+	return {
+		"direction": _stairs_direction_name(fields.get("direction", 0)),
+		"upper_layer": str(fields.get("layerUpper", "")),
+		"upper_sorting_layer": str(fields.get("sortingLayerUpper", "")),
+		"lower_layer": str(fields.get("layerLower", "")),
+		"lower_sorting_layer": str(fields.get("sortingLayerLower", "")),
+	}
+
+
+func _sprite_color_animation_data(mono: Dictionary) -> Dictionary:
+	var fields: Dictionary = mono.get("fields", {})
+	var gradient := _extract_gradient_data(str(mono.get("raw_body", "")))
+	return {
+		"duration_seconds": float(fields.get("time", 0.0)),
+		"gradient_mode": gradient.get("gradient_mode", "blend"),
+		"color_keys": gradient.get("color_keys", []),
+		"alpha_keys": gradient.get("alpha_keys", []),
+	}
+
+
+func _altar_behavior_data(mono: Dictionary, renderer_node_paths: Dictionary) -> Dictionary:
+	var fields: Dictionary = mono.get("fields", {})
+	var rune_node_paths := []
+	for renderer_id_variant in _extract_list_file_ids(str(mono.get("raw_body", "")), "runes"):
+		var renderer_id := str(renderer_id_variant)
+		if renderer_node_paths.has(renderer_id):
+			rune_node_paths.append(renderer_node_paths[renderer_id])
+	return {
+		"rune_node_paths": rune_node_paths,
+		"lerp_speed": float(fields.get("lerpSpeed", 0.0)),
+		"trigger_mode": "alpha_lerp_on_trigger",
+	}
+
+
+func _top_down_controller_data(mono: Dictionary) -> Dictionary:
+	var fields: Dictionary = mono.get("fields", {})
+	return {
+		"speed": float(fields.get("speed", 0.0)),
+		"input_scheme": "wasd_4dir",
+		"direction_parameter": "Direction",
+		"moving_parameter": "IsMoving",
+		"direction_values": {
+			"south": 0,
+			"north": 1,
+			"east": 2,
+			"west": 3,
+		},
+		"requires_animator": true,
+		"requires_rigidbody2d": true,
+	}
+
+
+func _extract_list_file_ids(body: String, key: String) -> Array:
+	var ids := []
+	var lines := body.split("\n")
+	var in_list := false
+	for raw_line_variant in lines:
+		var raw_line: String = str(raw_line_variant)
+		if raw_line.begins_with("  %s:" % key):
+			in_list = true
+			continue
+		if not in_list:
+			continue
+		if raw_line.begins_with("  ") and not raw_line.begins_with("  -"):
+			break
+		var line: String = raw_line.strip_edges()
+		if line.begins_with("- {fileID: "):
+			ids.append(line.trim_prefix("- {fileID: ").trim_suffix("}"))
+	return ids
+
+
+func _extract_gradient_data(body: String) -> Dictionary:
+	var values := {}
+	for raw_line in _extract_nested_block_lines(body, "gradient"):
+		var line: String = str(raw_line).strip_edges()
+		var colon: int = line.find(":")
+		if colon <= 0:
+			continue
+		var nested_key: String = line.substr(0, colon).strip_edges()
+		var nested_value: String = line.substr(colon + 1).strip_edges()
+		values[nested_key] = nested_value
+	var gradient_mode_raw = values.get("m_Mode", values.get("mode", "0"))
+	var color_key_count := int(_parse_scalar(str(values.get("m_NumColorKeys", "0"))))
+	var alpha_key_count := int(_parse_scalar(str(values.get("m_NumAlphaKeys", "0"))))
+	var color_keys := []
+	for index in range(color_key_count):
+		var color := _parse_color_literal(str(values.get("key%d" % index, "")))
+		if color.is_empty():
+			continue
+		color_keys.append({
+			"time": _gradient_time_to_ratio(_parse_scalar(str(values.get("ctime%d" % index, "0")))),
+			"color": color,
+		})
+	var alpha_keys := []
+	for index in range(alpha_key_count):
+		var alpha_color := _parse_color_literal(str(values.get("key%d" % index, "")))
+		if alpha_color.is_empty():
+			continue
+		alpha_keys.append({
+			"time": _gradient_time_to_ratio(_parse_scalar(str(values.get("atime%d" % index, "0")))),
+			"alpha": float(alpha_color.get("a", 0.0)),
+		})
+	return {
+		"gradient_mode": _gradient_mode_name(gradient_mode_raw),
+		"color_keys": color_keys,
+		"alpha_keys": alpha_keys,
+	}
+
+
+func _extract_nested_block_lines(body: String, key: String) -> Array:
+	var lines := body.split("\n")
+	var nested := []
+	var in_block := false
+	for raw_line in lines:
+		if raw_line.begins_with("  %s:" % key):
+			in_block = true
+			continue
+		if not in_block:
+			continue
+		if not raw_line.begins_with("    "):
+			break
+		nested.append(raw_line.substr(4))
+	return nested
+
+
+func _parse_color_literal(value: String) -> Dictionary:
+	var match := _regex_search(value, "\\{r: ([^,]+), g: ([^,]+), b: ([^,]+), a: ([^\\}]+)\\}")
+	if match.size() < 4:
+		return {}
+	return {
+		"r": float(match[0]),
+		"g": float(match[1]),
+		"b": float(match[2]),
+		"a": float(match[3]),
+	}
+
+
+func _gradient_time_to_ratio(value) -> float:
+	return clamp(float(value) / 65535.0, 0.0, 1.0)
+
+
+func _gradient_mode_name(value) -> String:
+	var mode_int := int(_parse_scalar(str(value)))
+	match mode_int:
+		1:
+			return "fixed"
+		_:
+			return "blend"
+
+
+func _stairs_direction_name(value) -> String:
+	match int(_parse_scalar(str(value))):
+		0:
+			return "north"
+		2:
+			return "west"
+		3:
+			return "east"
+		_:
+			return "south"
+
+
+func _behavior_kinds_from_hints(behavior_hints: Array) -> Array:
+	var kinds := []
+	for hint_variant in behavior_hints:
+		var hint: Dictionary = hint_variant
+		var kind := str(hint.get("kind", ""))
+		if not kind.is_empty() and not kinds.has(kind):
+			kinds.append(kind)
+	return kinds
 
 
 func _extract_mono_fields(body: String) -> Dictionary:
@@ -562,6 +864,8 @@ func _regex_search(text: String, pattern: String) -> Array:
 
 
 func _family_from_prefab_path(asset_path: String, display_name: String) -> String:
+	if not asset_path.contains("/Prefab/"):
+		return "editor_only"
 	if asset_path.contains("/Prefab/Plant/"):
 		return "plants"
 	if asset_path.contains("/Prefab/Player/"):
@@ -569,6 +873,95 @@ func _family_from_prefab_path(asset_path: String, display_name: String) -> Strin
 	if display_name.begins_with("PF Struct"):
 		return "struct"
 	return "props"
+
+
+func _prefab_reason_tokens(
+	has_box_collider: bool,
+	simple_edge_collider_count: int,
+	complex_edge_collider_count: int,
+	unresolved_sprite_refs: Array,
+	behavior_kinds: Array,
+	has_mono: bool,
+	has_animator: bool,
+	has_polygon: bool,
+	has_rigidbody: bool
+) -> Array:
+	var reasons := []
+	if has_box_collider:
+		reasons.append("box_collider_imported")
+	if simple_edge_collider_count > 0:
+		reasons.append("edge_collider_imported")
+	if complex_edge_collider_count > 0:
+		reasons.append("edge_collider_deferred_complex")
+	if not unresolved_sprite_refs.is_empty():
+		reasons.append("unresolved_sprite_reference")
+	if has_mono:
+		reasons.append("mono_behaviour_present")
+	for behavior_kind_variant in behavior_kinds:
+		match str(behavior_kind_variant):
+			"stairs_layer_trigger":
+				reasons.append("stairs_layer_trigger_hint")
+			"sprite_color_animation":
+				reasons.append("sprite_color_animation_hint")
+			"altar_trigger":
+				reasons.append("altar_trigger_hint")
+			"top_down_character_controller":
+				reasons.append("top_down_character_controller_hint")
+	if has_animator:
+		reasons.append("animator_present")
+	if has_polygon:
+		reasons.append("polygon_collider_deferred")
+	if has_rigidbody:
+		reasons.append("rigidbody_deferred")
+	return reasons
+
+
+func _prefab_report_details(
+	unresolved_sprite_refs: Array,
+	unsupported_components: Array,
+	box_collider_count: int,
+	simple_edge_collider_count: int,
+	complex_edge_collider_count: int,
+	behavior_kinds: Array
+) -> Dictionary:
+	var details := {}
+	if not unresolved_sprite_refs.is_empty():
+		details["unresolved_sprite_refs"] = unresolved_sprite_refs.duplicate()
+	if not unsupported_components.is_empty():
+		details["unsupported_components"] = unsupported_components.duplicate()
+	if not behavior_kinds.is_empty():
+		details["behavior_kinds"] = behavior_kinds.duplicate()
+	if box_collider_count > 0:
+		details["box_collider_count"] = box_collider_count
+	if simple_edge_collider_count > 0:
+		details["simple_edge_collider_count"] = simple_edge_collider_count
+	if complex_edge_collider_count > 0:
+		details["complex_edge_collider_count"] = complex_edge_collider_count
+	return details
+
+
+func _prefab_next_step(support_tier: String, reason_tokens: Array, behavior_kinds: Array = []) -> String:
+	if reason_tokens.has("stairs_layer_trigger_hint"):
+		if support_tier == "unresolved_or_skipped":
+			return "Repair the unresolved stairs sprite mapping, then rebuild the layer/sorting trigger in Godot from the preserved stairs behavior hint."
+		return "Use the generated stairs scene as a visual base and rebuild the layer/sorting trigger in Godot from the preserved stairs behavior hint."
+	if reason_tokens.has("sprite_color_animation_hint"):
+		return "Use the generated scene as a visual base and rebuild the rune glow/color animation from the preserved normalized gradient data."
+	if reason_tokens.has("altar_trigger_hint"):
+		return "Use the generated altar scene as a visual base and rebuild the trigger-driven rune glow using the preserved rune-node mapping and lerp settings."
+	if reason_tokens.has("top_down_character_controller_hint"):
+		return "Use the generated player scene as a visual base and rebuild movement, animator parameters, and rigidbody behavior from the preserved controller hint."
+	match support_tier:
+		"supported_static":
+			return "Place the generated scene directly in Godot and add gameplay logic only if your project needs it."
+		"approximated":
+			if reason_tokens.has("edge_collider_deferred_complex") or reason_tokens.has("polygon_collider_deferred") or reason_tokens.has("rigidbody_deferred"):
+				return "Use the generated scene as a visual base, then rebuild or refine collision/physics behavior manually in Godot."
+			return "Use the generated scene as a visual base and inspect the preserved metadata before relying on runtime behavior."
+		"manual_behavior":
+			return "Use the generated scene as a visual base and rebuild the deferred Unity behavior in Godot using the preserved metadata."
+		_:
+			return "Inspect the unresolved references and either repair the importer mapping or use fallback atlas scenes for this asset."
 
 
 func _source_key_from_asset_path(asset_path: String) -> String:

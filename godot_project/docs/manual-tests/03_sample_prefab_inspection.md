@@ -45,12 +45,13 @@ Check in the Scene dock:
 
 Check in the Inspector:
 - inspect the stairs nodes, especially `Stairs Layer Trigger`
-- open the `Metadata` section on the node that represents the trigger/behavior helper
-- confirm `unity_mono_behaviours` exists there
+- open the `Metadata` section on the root and confirm `cainos_behavior_hints` exists
+- open the `Metadata` section on `Stairs Layer Trigger`
+- confirm both `cainos_behavior_hints` and `unity_mono_behaviours` exist there
 
 Expected result:
 - the prefab is visually imported
-- runtime behavior is not implemented here, but the deferred Unity behavior is still recorded as metadata on the relevant node
+- runtime behavior is not implemented here, but the deferred Unity behavior is recorded both as normalized `cainos_behavior_hints` and the legacy raw `unity_mono_behaviours` payload
 
 ## 4. Player prefab
 

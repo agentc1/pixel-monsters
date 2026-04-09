@@ -69,6 +69,8 @@ Expected result:
 - Import completes successfully
 - `import_manifest.json` exists in `res://cainos_imports/basic/reports/`
 - `compatibility_report.md` exists in `res://cainos_imports/basic/reports/`
+- `compatibility_report.md` lists prefab-level entries grouped by tier, not just pack-level counts
+- `asset_catalog.md` lists generated named prefab scenes individually, not just collection folders
 - `basic_preview_map.tscn` exists in `res://cainos_imports/basic/scenes/helpers/`
 
 ## If it fails
