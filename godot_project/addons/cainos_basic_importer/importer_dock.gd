@@ -3,19 +3,20 @@ extends VBoxContainer
 
 const BasicPackImporter := preload("res://addons/cainos_basic_importer/basic_pack_importer.gd")
 
-var _editor_interface: EditorInterface
+var _editor_interface
 var _source_path_edit: LineEdit
 var _output_root_edit: LineEdit
-var _generate_plain_scenes: CheckBox
-var _generate_shadow_scenes: CheckBox
+var _prefer_semantic_prefabs: CheckBox
+var _generate_fallback_atlas_scenes: CheckBox
+var _generate_baked_shadow_helpers: CheckBox
 var _generate_preview_scene: CheckBox
-var _generate_player_assets: CheckBox
+var _generate_player_helpers: CheckBox
 var _log_output: TextEdit
 var _dir_dialog: FileDialog
 var _file_dialog: FileDialog
 
 
-func setup(editor_interface: EditorInterface) -> void:
+func setup(editor_interface) -> void:
 	_editor_interface = editor_interface
 	if get_child_count() == 0:
 		_build_ui()
@@ -35,7 +36,7 @@ func _build_ui() -> void:
 	description.fit_content = true
 	description.scroll_active = false
 	description.bbcode_enabled = true
-	description.text = "Import the extracted or zipped [b]Pixel Art Top Down - Basic[/b] pack into paintable [b]TileSet[/b] resources, generic prop/plant scenes, a player preview, and a compatibility report."
+	description.text = "Import the licensed [b]Pixel Art Top Down - Basic[/b] pack into paintable [b]TileSet[/b] resources and named Godot prefab scenes. The recommended source is the original [b].unitypackage[/b] or an extracted Unity project folder."
 	add_child(description)
 
 	var source_label := Label.new()
@@ -46,7 +47,7 @@ func _build_ui() -> void:
 	add_child(source_row)
 
 	_source_path_edit = LineEdit.new()
-	_source_path_edit.placeholder_text = "/path/to/extracted/basic pack or basic.zip"
+	_source_path_edit.placeholder_text = "/path/to/basic.unitypackage, extracted Unity project, or texture zip/folder"
 	_source_path_edit.size_flags_horizontal = SIZE_EXPAND_FILL
 	source_row.add_child(_source_path_edit)
 
@@ -56,7 +57,7 @@ func _build_ui() -> void:
 	source_row.add_child(browse_folder)
 
 	var browse_file := Button.new()
-	browse_file.text = "Browse Zip"
+	browse_file.text = "Browse File"
 	browse_file.pressed.connect(_on_browse_file_pressed)
 	source_row.add_child(browse_file)
 
@@ -67,25 +68,30 @@ func _build_ui() -> void:
 	_output_root_edit = LineEdit.new()
 	add_child(_output_root_edit)
 
-	_generate_plain_scenes = CheckBox.new()
-	_generate_plain_scenes.text = "Generate plain prop/plant scenes"
-	_generate_plain_scenes.button_pressed = true
-	add_child(_generate_plain_scenes)
+	_prefer_semantic_prefabs = CheckBox.new()
+	_prefer_semantic_prefabs.text = "Prefer named semantic prefab scenes"
+	_prefer_semantic_prefabs.button_pressed = true
+	add_child(_prefer_semantic_prefabs)
 
-	_generate_shadow_scenes = CheckBox.new()
-	_generate_shadow_scenes.text = "Generate baked-shadow prop/plant scenes"
-	_generate_shadow_scenes.button_pressed = true
-	add_child(_generate_shadow_scenes)
+	_generate_fallback_atlas_scenes = CheckBox.new()
+	_generate_fallback_atlas_scenes.text = "Generate fallback atlas-cell scenes"
+	_generate_fallback_atlas_scenes.button_pressed = false
+	add_child(_generate_fallback_atlas_scenes)
+
+	_generate_baked_shadow_helpers = CheckBox.new()
+	_generate_baked_shadow_helpers.text = "Generate baked-shadow fallback helpers"
+	_generate_baked_shadow_helpers.button_pressed = false
+	add_child(_generate_baked_shadow_helpers)
 
 	_generate_preview_scene = CheckBox.new()
-	_generate_preview_scene.text = "Generate preview scene"
+	_generate_preview_scene.text = "Generate helper preview scenes"
 	_generate_preview_scene.button_pressed = true
 	add_child(_generate_preview_scene)
 
-	_generate_player_assets = CheckBox.new()
-	_generate_player_assets.text = "Generate player preview assets"
-	_generate_player_assets.button_pressed = true
-	add_child(_generate_player_assets)
+	_generate_player_helpers = CheckBox.new()
+	_generate_player_helpers.text = "Generate player helper assets"
+	_generate_player_helpers.button_pressed = true
+	add_child(_generate_player_helpers)
 
 	var actions := HBoxContainer.new()
 	add_child(actions)
@@ -109,7 +115,7 @@ func _build_ui() -> void:
 	notes.fit_content = true
 	notes.scroll_active = false
 	notes.bbcode_enabled = true
-	notes.text = "Beginner workflow after import: [b]Add Child Node -> TileMapLayer[/b], assign one of the generated TileSets, then paint in the [b]TileMap[/b] bottom panel."
+	notes.text = "Beginner workflow after import: [b]Add Child Node -> TileMapLayer[/b], assign a generated TileSet, then place named prefab scenes from [b]res://cainos_imports/basic/scenes/prefabs/[/b]. Atlas fallback scenes are optional."
 	add_child(notes)
 
 	_log_output = TextEdit.new()
@@ -126,7 +132,7 @@ func _build_ui() -> void:
 	_file_dialog = FileDialog.new()
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	_file_dialog.filters = PackedStringArray(["*.zip ; Zip archive"])
+	_file_dialog.filters = PackedStringArray(["*.unitypackage ; Unity package", "*.zip ; Zip archive"])
 	_file_dialog.file_selected.connect(_on_file_selected)
 	add_child(_file_dialog)
 
@@ -134,17 +140,19 @@ func _build_ui() -> void:
 func _suggest_default_source() -> void:
 	var project_dir := ProjectSettings.globalize_path("res://")
 	var repo_root := project_dir.get_base_dir()
-	if DirAccess.dir_exists_absolute(repo_root.path_join("Texture")):
-		_source_path_edit.text = repo_root
+	var local_pack := repo_root.path_join("local_inputs/basic_pack")
+	if DirAccess.dir_exists_absolute(local_pack):
+		_source_path_edit.text = local_pack
 
 
 func _profile() -> Dictionary:
 	return {
 		"output_root": _output_root_edit.text.strip_edges(),
-		"generate_plain_scenes": _generate_plain_scenes.button_pressed,
-		"generate_shadow_scenes": _generate_shadow_scenes.button_pressed,
+		"prefer_semantic_prefabs": _prefer_semantic_prefabs.button_pressed,
+		"generate_fallback_atlas_scenes": _generate_fallback_atlas_scenes.button_pressed,
+		"generate_baked_shadow_helpers": _generate_baked_shadow_helpers.button_pressed,
 		"generate_preview_scene": _generate_preview_scene.button_pressed,
-		"generate_player_assets": _generate_player_assets.button_pressed,
+		"generate_player_helpers": _generate_player_helpers.button_pressed,
 	}
 
 
@@ -190,7 +198,7 @@ func _on_open_output_pressed() -> void:
 func _run(mode: String) -> void:
 	var source_path := _source_path_edit.text.strip_edges()
 	if source_path.is_empty():
-		_append_log("Choose a source folder or zip first.")
+		_append_log("Choose a source folder or file first.")
 		return
 
 	_append_log("--- %s started ---" % mode.capitalize())

@@ -1,17 +1,23 @@
 @tool
 extends RefCounted
 
+const UnityMetadataRegistry := preload("res://addons/cainos_basic_importer/unity_metadata_registry.gd")
+
 const PACK_ID := "basic"
 const IMPORTER_ID := "cainos_basic_importer"
-const IMPORTER_VERSION := "0.1.0"
+const IMPORTER_VERSION := "0.2.0"
 const DEFAULT_OUTPUT_ROOT := "res://cainos_imports/basic"
 const TILE_SIZE := Vector2i(32, 32)
+const DEFAULT_PPU := 32.0
+const TEXTURE_FILTER_NEAREST := 1
+
 const DEFAULT_GENERATION_PROFILE := {
 	"output_root": DEFAULT_OUTPUT_ROOT,
-	"generate_plain_scenes": true,
-	"generate_shadow_scenes": true,
+	"prefer_semantic_prefabs": true,
+	"generate_fallback_atlas_scenes": false,
+	"generate_baked_shadow_helpers": false,
 	"generate_preview_scene": true,
-	"generate_player_assets": true,
+	"generate_player_helpers": true,
 }
 
 const REQUIRED_SOURCE_FILES := {
@@ -29,10 +35,6 @@ const REQUIRED_SOURCE_FILES := {
 const OPTIONAL_SOURCE_FILES := {
 	"extra_props_shadow": "Texture/Extra/TX Props with Shadow.png",
 	"extra_plants_shadow": "Texture/Extra/TX Plant with Shadow.png",
-	"scene_overview_a": "Scene Overview.png",
-	"scene_overview_b": "scene-overview.png",
-	"unitypackage_a": "Pixel Art Top Down - Basic v1.2.3.unitypackage",
-	"unitypackage_b": "pixel-art-top-down-basic-v1.2.3.unitypackage",
 }
 
 const TILESET_SPECS := [
@@ -42,12 +44,12 @@ const TILESET_SPECS := [
 	{"key": "struct", "name": "struct", "output": "tilesets/basic_struct_tileset.tres"},
 ]
 
-var _editor_interface: EditorInterface
+var _editor_interface
 var _log: Callable
 var _active_output_root := DEFAULT_OUTPUT_ROOT
 
 
-func _init(editor_interface: EditorInterface = null, logger: Callable = Callable()) -> void:
+func _init(editor_interface = null, logger: Callable = Callable()) -> void:
 	_editor_interface = editor_interface
 	_log = logger
 
@@ -58,18 +60,30 @@ func scan_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 	if not probe.get("ok", false):
 		return probe
 
-	var inventory := _build_inventory(probe)
+	var semantic_registry := {}
+	var semantic_candidate := probe.get("semantic_source", {})
+	if probe.get("source_kind", "") == "unitypackage" or (normalized_profile.get("prefer_semantic_prefabs", true) and not semantic_candidate.is_empty()):
+		semantic_registry = _load_semantic_registry(probe)
+		if not semantic_registry.get("ok", false):
+			if probe.get("source_kind", "") == "unitypackage":
+				return semantic_registry
+			probe["semantic_error"] = semantic_registry.get("error", "")
+			semantic_registry = {}
+
+	var inventory := _build_inventory(probe, semantic_registry)
 	var compatibility := _build_compatibility(inventory)
 	var summary := {
 		"pack_id": PACK_ID,
 		"source_kind": probe.get("source_kind", "unknown"),
+		"semantic_available": inventory.get("semantic_available", false),
 		"tileset_atlases": inventory.get("tileset_atlases", 0),
 		"tileset_tiles": inventory.get("tileset_tiles", 0),
-		"plain_prop_scenes": inventory.get("plain_prop_cells", 0),
-		"plain_plant_scenes": inventory.get("plain_plant_cells", 0),
-		"shadow_prop_scenes": inventory.get("shadow_prop_cells", 0),
-		"shadow_plant_scenes": inventory.get("shadow_plant_cells", 0),
-		"player_cells": inventory.get("player_cells", 0),
+		"supported_static_prefabs": inventory.get("supported_static_prefabs", 0),
+		"approximated_prefabs": inventory.get("approximated_prefabs", 0),
+		"manual_behavior_prefabs": inventory.get("manual_behavior_prefabs", 0),
+		"unresolved_or_skipped_prefabs": inventory.get("unresolved_or_skipped_prefabs", 0),
+		"fallback_prop_cells": inventory.get("plain_prop_cells", 0),
+		"fallback_plant_cells": inventory.get("plain_plant_cells", 0),
 	}
 	return {
 		"ok": true,
@@ -77,6 +91,7 @@ func scan_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		"pack_id": PACK_ID,
 		"profile": normalized_profile,
 		"source": probe,
+		"semantic_registry": semantic_registry,
 		"inventory": inventory,
 		"compatibility": compatibility,
 		"summary": summary,
@@ -93,6 +108,7 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 	_active_output_root = output_root
 	var output_root_abs := ProjectSettings.globalize_path(output_root)
 	var source_info: Dictionary = scan.get("source", {})
+	var semantic_registry: Dictionary = scan.get("semantic_registry", {})
 	var inventory: Dictionary = scan.get("inventory", {})
 	var compatibility: Array = scan.get("compatibility", [])
 
@@ -100,82 +116,101 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 	_remove_tree_absolute(output_root_abs)
 	_ensure_dir(output_root_abs)
 
-	var copied_sources := _copy_selected_sources(source_info, output_root)
+	var copied_sources := _copy_selected_sources(source_info, output_root, semantic_registry)
 	if not copied_sources.get("ok", false):
 		return copied_sources
 
 	var copied_res_paths: Dictionary = copied_sources.get("copied", {})
 	await _wait_for_import(copied_res_paths.values())
 
-	var outputs: Array[String] = []
+	var outputs := []
 	var catalog := {
 		"pack_id": PACK_ID,
 		"tilesets": [],
 		"scene_collections": [],
 		"helper_scenes": [],
 	}
+	var generated_tilesets := {}
 
 	for spec_variant in TILESET_SPECS:
 		var spec: Dictionary = spec_variant
+		if not copied_res_paths.has(spec.get("key", "")):
+			continue
 		var tileset_result := _generate_tileset(spec, copied_res_paths)
 		if not tileset_result.get("ok", false):
 			return tileset_result
 		outputs.append(tileset_result.get("path", ""))
 		catalog["tilesets"].append(tileset_result.get("catalog_entry", {}))
+		generated_tilesets[str(spec.get("key", ""))] = tileset_result.get("resource")
 
-	var generated_scenes := {
-		"plain_props": [],
-		"plain_plants": [],
-		"shadow_props": [],
-		"shadow_plants": [],
+	var semantic_generated := {
+		"tier_counts": {
+			"supported_static": 0,
+			"approximated": 0,
+			"manual_behavior": 0,
+			"unresolved_or_skipped": 0,
+		},
+		"family_to_paths": {
+			"plants": [],
+			"props": [],
+			"struct": [],
+			"player": [],
+		},
 	}
+	if normalized_profile.get("prefer_semantic_prefabs", true) and semantic_registry.get("ok", false):
+		var semantic_result := _generate_semantic_prefab_collections(semantic_registry, copied_res_paths)
+		if not semantic_result.get("ok", false):
+			return semantic_result
+		outputs.append_array(semantic_result.get("paths", []))
+		semantic_generated = semantic_result
+		for entry_variant in semantic_result.get("catalog_entries", []):
+			catalog["scene_collections"].append(entry_variant)
 
-	if normalized_profile.get("generate_plain_scenes", true):
-		var props_plain := _generate_sprite_scene_collection("props_plain", copied_res_paths.get("props", ""), "scenes/props/plain", "prop")
-		if not props_plain.get("ok", false):
-			return props_plain
-		outputs.append_array(props_plain.get("paths", []))
-		generated_scenes["plain_props"] = props_plain.get("paths", [])
-		catalog["scene_collections"].append(props_plain.get("catalog_entry", {}))
+	if normalized_profile.get("generate_fallback_atlas_scenes", false) or catalog["scene_collections"].is_empty():
+		if copied_res_paths.has("props"):
+			var props_plain := _generate_sprite_scene_collection("props_plain", copied_res_paths.get("props", ""), "scenes/fallback/props/plain", "prop")
+			if not props_plain.get("ok", false):
+				return props_plain
+			outputs.append_array(props_plain.get("paths", []))
+			catalog["scene_collections"].append(props_plain.get("catalog_entry", {}))
 
-		var plants_plain := _generate_sprite_scene_collection("plants_plain", copied_res_paths.get("plants", ""), "scenes/plants/plain", "plant")
-		if not plants_plain.get("ok", false):
-			return plants_plain
-		outputs.append_array(plants_plain.get("paths", []))
-		generated_scenes["plain_plants"] = plants_plain.get("paths", [])
-		catalog["scene_collections"].append(plants_plain.get("catalog_entry", {}))
+		if copied_res_paths.has("plants"):
+			var plants_plain := _generate_sprite_scene_collection("plants_plain", copied_res_paths.get("plants", ""), "scenes/fallback/plants/plain", "plant")
+			if not plants_plain.get("ok", false):
+				return plants_plain
+			outputs.append_array(plants_plain.get("paths", []))
+			catalog["scene_collections"].append(plants_plain.get("catalog_entry", {}))
 
-	if normalized_profile.get("generate_shadow_scenes", true):
-		if copied_res_paths.has("extra_props_shadow"):
-			var props_shadow := _generate_sprite_scene_collection("props_shadow", copied_res_paths.get("extra_props_shadow", ""), "scenes/props/shadow_baked", "prop_shadow")
-			if not props_shadow.get("ok", false):
-				return props_shadow
-			outputs.append_array(props_shadow.get("paths", []))
-			generated_scenes["shadow_props"] = props_shadow.get("paths", [])
-			catalog["scene_collections"].append(props_shadow.get("catalog_entry", {}))
+		if normalized_profile.get("generate_baked_shadow_helpers", false):
+			if copied_res_paths.has("extra_props_shadow"):
+				var props_shadow := _generate_sprite_scene_collection("props_shadow", copied_res_paths.get("extra_props_shadow", ""), "scenes/fallback/props/shadow_baked", "prop_shadow")
+				if not props_shadow.get("ok", false):
+					return props_shadow
+				outputs.append_array(props_shadow.get("paths", []))
+				catalog["scene_collections"].append(props_shadow.get("catalog_entry", {}))
 
-		if copied_res_paths.has("extra_plants_shadow"):
-			var plants_shadow := _generate_sprite_scene_collection("plants_shadow", copied_res_paths.get("extra_plants_shadow", ""), "scenes/plants/shadow_baked", "plant_shadow")
-			if not plants_shadow.get("ok", false):
-				return plants_shadow
-			outputs.append_array(plants_shadow.get("paths", []))
-			generated_scenes["shadow_plants"] = plants_shadow.get("paths", [])
-			catalog["scene_collections"].append(plants_shadow.get("catalog_entry", {}))
+			if copied_res_paths.has("extra_plants_shadow"):
+				var plants_shadow := _generate_sprite_scene_collection("plants_shadow", copied_res_paths.get("extra_plants_shadow", ""), "scenes/fallback/plants/shadow_baked", "plant_shadow")
+				if not plants_shadow.get("ok", false):
+					return plants_shadow
+				outputs.append_array(plants_shadow.get("paths", []))
+				catalog["scene_collections"].append(plants_shadow.get("catalog_entry", {}))
 
-	var player_output := {}
-	if normalized_profile.get("generate_player_assets", true):
-		player_output = _generate_player_assets(copied_res_paths.get("player", ""))
-		if not player_output.get("ok", false):
-			return player_output
-		outputs.append_array(player_output.get("paths", []))
-		catalog["scene_collections"].append(player_output.get("catalog_entry", {}))
+	var player_helpers := {}
+	if normalized_profile.get("generate_player_helpers", true) and copied_res_paths.has("player"):
+		player_helpers = _generate_player_helper_assets(copied_res_paths.get("player", ""))
+		if not player_helpers.get("ok", false):
+			return player_helpers
+		outputs.append_array(player_helpers.get("paths", []))
+		catalog["scene_collections"].append(player_helpers.get("catalog_entry", {}))
 
 	if normalized_profile.get("generate_preview_scene", true):
-		var preview_result := _generate_preview_scene(copied_res_paths, generated_scenes, player_output)
+		var preview_result := _generate_preview_scene(generated_tilesets, copied_res_paths, semantic_registry, semantic_generated, player_helpers)
 		if not preview_result.get("ok", false):
 			return preview_result
-		outputs.append(preview_result.get("path", ""))
-		catalog["helper_scenes"].append(preview_result.get("catalog_entry", {}))
+		outputs.append_array(preview_result.get("paths", []))
+		for entry_variant in preview_result.get("catalog_entries", []):
+			catalog["helper_scenes"].append(entry_variant)
 
 	var manifest := {
 		"pack_id": PACK_ID,
@@ -186,12 +221,14 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		},
 		"source": {
 			"kind": source_info.get("source_kind", ""),
-			"path": source_info.get("source_path", ""),
+			"display_name": source_info.get("display_name", ""),
 			"source_hash": source_info.get("source_hash", ""),
+			"semantic_source_kind": _semantic_source_kind_label(source_info),
 		},
 		"profile": normalized_profile,
 		"profile_hash": _sha256_text(JSON.stringify(normalized_profile, "", true)),
 		"inventory": inventory,
+		"semantic_summary": semantic_generated.get("tier_counts", {}),
 		"outputs": outputs,
 		"catalog": catalog,
 	}
@@ -204,7 +241,7 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		"tilesets": len(catalog.get("tilesets", [])),
 		"scene_collections": len(catalog.get("scene_collections", [])),
 		"helper_scenes": len(catalog.get("helper_scenes", [])),
-		"generated_files": outputs.size() + reports.get("written_files", 0),
+		"generated_files": outputs.size() + int(reports.get("written_files", 0)),
 	}
 	return {
 		"ok": true,
@@ -233,15 +270,12 @@ func _probe_source(source_path: String) -> Dictionary:
 
 	if FileAccess.file_exists(absolute):
 		if absolute.to_lower().ends_with(".unitypackage"):
-			return {
-				"ok": false,
-				"error": "Direct .unitypackage import is not supported in v1. Point the importer at the extracted pack folder or the original zip that contains Texture/ files.",
-			}
+			return _probe_unitypackage_source(absolute)
 		if absolute.to_lower().ends_with(".zip"):
 			return _probe_zip_source(absolute)
 		return {
 			"ok": false,
-			"error": "Unsupported source file. Use the extracted pack folder or a zip containing the Texture/ directory.",
+			"error": "Unsupported source file: %s" % absolute,
 		}
 
 	if DirAccess.dir_exists_absolute(absolute):
@@ -253,29 +287,37 @@ func _probe_source(source_path: String) -> Dictionary:
 	}
 
 
+func _probe_unitypackage_source(package_path: String) -> Dictionary:
+	return {
+		"ok": true,
+		"source_kind": "unitypackage",
+		"source_path": package_path,
+		"display_name": package_path.get_file(),
+		"resolved_paths": {},
+		"source_hash": _sha256_file(package_path),
+		"semantic_source": {
+			"kind": "unitypackage_file",
+			"path": package_path,
+		},
+	}
+
+
 func _probe_folder_source(absolute_dir: String) -> Dictionary:
 	var pack_root := absolute_dir
 	var texture_root := absolute_dir.path_join("Texture")
 	if not DirAccess.dir_exists_absolute(texture_root):
 		if FileAccess.file_exists(absolute_dir.path_join("TX Tileset Grass.png")):
-			texture_root = absolute_dir
 			pack_root = absolute_dir.get_base_dir()
+			texture_root = absolute_dir
 		else:
-			return {
-				"ok": false,
-				"error": "Could not find a Texture directory in %s" % absolute_dir,
-			}
+			pack_root = absolute_dir
 
 	var resolved := {}
 	for key in REQUIRED_SOURCE_FILES.keys():
 		var rel_path: String = REQUIRED_SOURCE_FILES[key]
 		var full_path := pack_root.path_join(rel_path)
-		if not FileAccess.file_exists(full_path):
-			return {
-				"ok": false,
-				"error": "Missing required file: %s" % rel_path,
-			}
-		resolved[key] = full_path
+		if FileAccess.file_exists(full_path):
+			resolved[key] = full_path
 
 	for optional_key in OPTIONAL_SOURCE_FILES.keys():
 		var optional_rel: String = OPTIONAL_SOURCE_FILES[optional_key]
@@ -283,12 +325,33 @@ func _probe_folder_source(absolute_dir: String) -> Dictionary:
 		if FileAccess.file_exists(optional_path):
 			resolved[optional_key] = optional_path
 
+	var semantic_source := {}
+	var unitypackage_path := _find_sidecar_unitypackage(pack_root)
+	if not unitypackage_path.is_empty():
+		semantic_source = {
+			"kind": "unitypackage_file",
+			"path": unitypackage_path,
+		}
+	elif _contains_extracted_metadata(pack_root):
+		semantic_source = {
+			"kind": "extracted_metadata",
+			"root": pack_root,
+		}
+
+	if resolved.is_empty() and semantic_source.is_empty():
+		return {
+			"ok": false,
+			"error": "Could not find Cainos Basic textures or Unity metadata under: %s" % absolute_dir,
+		}
+
 	return {
 		"ok": true,
 		"source_kind": "folder",
 		"source_path": pack_root,
+		"display_name": pack_root.get_file(),
 		"resolved_paths": resolved,
-		"source_hash": _sha256_folder_probe(resolved),
+		"source_hash": _sha256_folder_probe(resolved if not resolved.is_empty() else _metadata_files_for_hash(pack_root)),
+		"semantic_source": semantic_source,
 	}
 
 
@@ -306,26 +369,37 @@ func _probe_zip_source(zip_path: String) -> Dictionary:
 	for key in REQUIRED_SOURCE_FILES.keys():
 		var suffix: String = REQUIRED_SOURCE_FILES[key]
 		var entry := _find_zip_entry(files, suffix)
-		if entry.is_empty():
-			reader.close()
-			return {
-				"ok": false,
-				"error": "Missing required zip entry: %s" % suffix,
-			}
-		resolved[key] = entry
-
+		if not entry.is_empty():
+			resolved[key] = entry
 	for optional_key in OPTIONAL_SOURCE_FILES.keys():
 		var optional_entry := _find_zip_entry(files, OPTIONAL_SOURCE_FILES[optional_key])
 		if not optional_entry.is_empty():
 			resolved[optional_key] = optional_entry
 
+	var semantic_source := {}
+	var unitypackage_entry := _find_zip_unitypackage(files)
+	if not unitypackage_entry.is_empty():
+		semantic_source = {
+			"kind": "unitypackage_zip_entry",
+			"zip_path": zip_path,
+			"entry": unitypackage_entry,
+		}
+
 	reader.close()
+	if resolved.is_empty() and semantic_source.is_empty():
+		return {
+			"ok": false,
+			"error": "Zip does not contain Cainos Basic textures or a .unitypackage payload: %s" % zip_path,
+		}
+
 	return {
 		"ok": true,
 		"source_kind": "zip",
 		"source_path": zip_path,
+		"display_name": zip_path.get_file(),
 		"resolved_paths": resolved,
 		"source_hash": _sha256_file(zip_path),
+		"semantic_source": semantic_source,
 	}
 
 
@@ -336,163 +410,295 @@ func _find_zip_entry(files: PackedStringArray, suffix: String) -> String:
 	return ""
 
 
-func _build_inventory(probe: Dictionary) -> Dictionary:
-	var resolved: Dictionary = probe.get("resolved_paths", {})
+func _find_zip_unitypackage(files: PackedStringArray) -> String:
+	for file_path in files:
+		if String(file_path).to_lower().ends_with(".unitypackage"):
+			return file_path
+	return ""
+
+
+func _find_sidecar_unitypackage(root_path: String) -> String:
+	var files := _list_files_recursive(root_path)
+	for file_path in files:
+		if file_path.to_lower().ends_with(".unitypackage"):
+			return file_path
+	return ""
+
+
+func _contains_extracted_metadata(root_path: String) -> bool:
+	var files := _list_files_recursive(root_path)
+	var has_prefab := false
+	var has_meta := false
+	for file_path in files:
+		if file_path.ends_with(".prefab"):
+			has_prefab = true
+		elif file_path.ends_with(".meta"):
+			has_meta = true
+		if has_prefab and has_meta:
+			return true
+	return false
+
+
+func _load_semantic_registry(source_info: Dictionary) -> Dictionary:
+	var semantic_source: Dictionary = source_info.get("semantic_source", {})
+	if semantic_source.is_empty():
+		return {
+			"ok": false,
+			"error": "No semantic source available.",
+		}
+
+	var registry = UnityMetadataRegistry.new()
+	match str(semantic_source.get("kind", "")):
+		"unitypackage_file":
+			return registry.build_from_unitypackage(str(semantic_source.get("path", "")))
+		"unitypackage_zip_entry":
+			var reader := ZIPReader.new()
+			var zip_path := str(semantic_source.get("zip_path", ""))
+			var err := reader.open(zip_path)
+			if err != OK:
+				return {
+					"ok": false,
+					"error": "Could not open zip for semantic import: %s" % zip_path,
+				}
+			var bytes := reader.read_file(str(semantic_source.get("entry", "")))
+			reader.close()
+			return registry.build_from_package_bytes(bytes, str(semantic_source.get("entry", "")))
+		"extracted_metadata":
+			return registry.build_from_extracted_metadata(str(semantic_source.get("root", "")))
+		_:
+			return {
+				"ok": false,
+				"error": "Unsupported semantic source kind: %s" % str(semantic_source.get("kind", "")),
+			}
+
+
+func _build_inventory(probe: Dictionary, semantic_registry: Dictionary) -> Dictionary:
 	var inventory := {
-		"tileset_atlases": 4,
+		"semantic_available": semantic_registry.get("ok", false),
+		"tileset_atlases": 0,
 		"tileset_tiles": 0,
 		"plain_prop_cells": 0,
 		"plain_plant_cells": 0,
 		"shadow_prop_cells": 0,
 		"shadow_plant_cells": 0,
-		"player_cells": 0,
-		"reference_scene_available": resolved.has("unitypackage_a") or resolved.has("unitypackage_b"),
+		"supported_static_prefabs": 0,
+		"approximated_prefabs": 0,
+		"manual_behavior_prefabs": 0,
+		"unresolved_or_skipped_prefabs": 0,
 	}
 
-	inventory["tileset_tiles"] = _count_non_empty_cells_from_source(probe, "tileset_grass") \
-		+ _count_non_empty_cells_from_source(probe, "tileset_stone_ground") \
-		+ _count_non_empty_cells_from_source(probe, "tileset_wall") \
-		+ _count_non_empty_cells_from_source(probe, "struct")
-	inventory["plain_prop_cells"] = _count_non_empty_cells_from_source(probe, "props")
-	inventory["plain_plant_cells"] = _count_non_empty_cells_from_source(probe, "plants")
-	inventory["shadow_prop_cells"] = _count_non_empty_cells_from_source(probe, "extra_props_shadow")
-	inventory["shadow_plant_cells"] = _count_non_empty_cells_from_source(probe, "extra_plants_shadow")
-	inventory["player_cells"] = _count_non_empty_cells_from_source(probe, "player")
+	for key in TILESET_SPECS:
+		var source_key := str(key.get("key", ""))
+		var count := _count_non_empty_cells(probe, source_key, semantic_registry)
+		if count > 0:
+			inventory["tileset_atlases"] += 1
+			inventory["tileset_tiles"] += count
+
+	inventory["plain_prop_cells"] = _count_non_empty_cells(probe, "props", semantic_registry)
+	inventory["plain_plant_cells"] = _count_non_empty_cells(probe, "plants", semantic_registry)
+	inventory["shadow_prop_cells"] = _count_non_empty_cells(probe, "extra_props_shadow", semantic_registry)
+	inventory["shadow_plant_cells"] = _count_non_empty_cells(probe, "extra_plants_shadow", semantic_registry)
+
+	if semantic_registry.get("ok", false):
+		var summary: Dictionary = semantic_registry.get("summary", {})
+		inventory["supported_static_prefabs"] = summary.get("supported_static_prefabs", 0)
+		inventory["approximated_prefabs"] = summary.get("approximated_prefabs", 0)
+		inventory["manual_behavior_prefabs"] = summary.get("manual_behavior_prefabs", 0)
+		inventory["unresolved_or_skipped_prefabs"] = summary.get("unresolved_or_skipped_prefabs", 0)
+
 	return inventory
 
 
 func _build_compatibility(inventory: Dictionary) -> Array:
-	return [
-		{
-			"family": "TileSet atlases",
+	var compatibility := []
+	compatibility.append({
+		"title": "TileSet atlases",
+		"status": "supported",
+		"detail": "Grass, stone ground, wall, and struct atlases import as external TileSet resources for TileMapLayer painting.",
+		"next": "Add a TileMapLayer node, assign a generated TileSet, and paint in the TileMap bottom panel.",
+	})
+
+	if inventory.get("semantic_available", false):
+		compatibility.append({
+			"title": "Named Unity prefabs",
 			"status": "supported",
-			"detail": "Grass, stone ground, wall, and struct atlases import as external TileSet resources for TileMapLayer painting.",
-			"next_action": "Add a TileMapLayer node, assign a generated TileSet, and paint in the TileMap bottom panel.",
-		},
-		{
-			"family": "Generic prop scenes",
-			"status": "supported",
-			"detail": "%s generic prop cells can be generated as Godot scenes." % inventory.get("plain_prop_cells", 0),
-			"next_action": "Place the generated prop scenes directly in your map scene.",
-		},
-		{
-			"family": "Generic plant scenes",
-			"status": "supported",
-			"detail": "%s generic plant cells can be generated as Godot scenes." % inventory.get("plain_plant_cells", 0),
-			"next_action": "Place the generated plant scenes directly in your map scene.",
-		},
-		{
-			"family": "Baked-shadow helper scenes",
+			"detail": "%s supported static prefabs import as named Godot scenes." % inventory.get("supported_static_prefabs", 0),
+			"next": "Use the generated prefab scene folders to place named plants, props, struct pieces, and player assets.",
+		})
+		compatibility.append({
+			"title": "Approximated prefab collisions",
 			"status": "approximated",
-			"detail": "Extra shadow atlases are used to create convenience scenes with baked shadows for quick authoring.",
-			"next_action": "Use the shadow-baked scenes when you want a fast drop-in look; switch to plain scenes if you need manual layering.",
-		},
-		{
-			"family": "Player animations",
-			"status": "approximated",
-			"detail": "The player sheet imports as row-based animation resources, not exact Unity controller behavior.",
-			"next_action": "Use the generated AnimatedSprite2D preview as a starting point and refine animations manually if needed.",
-		},
-		{
-			"family": "Named Unity prefabs",
+			"detail": "%s prefabs import with partial collision/physics fidelity; polygon colliders and rigidbodies are deferred." % inventory.get("approximated_prefabs", 0),
+			"next": "Use the generated scene as a visual base, then add or refine collisions manually where needed.",
+		})
+		compatibility.append({
+			"title": "Manual behavior prefabs",
 			"status": "manual",
-			"detail": "V1 generates generic atlas-cell scenes instead of one-to-one prefab-named Godot scenes.",
-			"next_action": "Use the catalog and preview scenes to pick assets, then rename or duplicate them into your own game folders.",
-		},
-		{
-			"family": "Unity scenes, scripts, materials, shaders, and URP patches",
-			"status": "unsupported",
-			"detail": "Unity demo scenes, behaviors, materials, and patch packages are not converted in v1.",
-			"next_action": "Use the generated report and preview scene as references while rebuilding gameplay or visual effects manually in Godot.",
-		},
-	]
+			"detail": "%s prefabs preserve trigger/script metadata but do not recreate Unity runtime behaviors." % inventory.get("manual_behavior_prefabs", 0),
+			"next": "Read the compatibility report and use the preserved metadata when rebuilding stairs, player control, or animation logic in Godot.",
+		})
+	else:
+		compatibility.append({
+			"title": "Named Unity prefabs",
+			"status": "manual",
+			"detail": "Semantic prefab import is unavailable without a .unitypackage or extracted Unity metadata source.",
+			"next": "Supply the Basic .unitypackage or an extracted Unity project folder to import named prefab scenes.",
+		})
+
+	compatibility.append({
+		"title": "Fallback atlas scenes",
+		"status": "approximated",
+		"detail": "%s prop cells and %s plant cells remain available as fallback atlas-cell scenes." % [inventory.get("plain_prop_cells", 0), inventory.get("plain_plant_cells", 0)],
+		"next": "Enable fallback atlas scenes in the importer only when semantic prefab output is unavailable or insufficient for your workflow.",
+	})
+	return compatibility
 
 
-func _count_non_empty_cells_from_source(probe: Dictionary, key: String) -> int:
-	var resolved: Dictionary = probe.get("resolved_paths", {})
-	if not resolved.has(key):
-		return 0
-	var image := _load_source_image(probe, key)
-	if image == null or image.is_empty():
+func _count_non_empty_cells(probe: Dictionary, key: String, semantic_registry: Dictionary) -> int:
+	var image := _load_source_image(probe, key, semantic_registry)
+	if image.is_empty():
 		return 0
 	return _non_empty_cells(image).size()
 
 
-func _copy_selected_sources(source_info: Dictionary, output_root: String) -> Dictionary:
+func _copy_selected_sources(source_info: Dictionary, output_root: String, semantic_registry: Dictionary) -> Dictionary:
 	var copied := {}
 	var textures_root := output_root.path_join("textures/source")
-	var textures_root_abs := ProjectSettings.globalize_path(textures_root)
-	_ensure_dir(textures_root_abs)
+	_ensure_dir(ProjectSettings.globalize_path(textures_root))
 
-	var resolved: Dictionary = source_info.get("resolved_paths", {})
-	if source_info.get("source_kind", "") == "folder":
-		for key in resolved.keys():
-			var source_abs := str(resolved[key])
-			var dest_rel := textures_root.path_join(source_abs.get_file())
-			if source_abs.contains("/Extra/"):
-				dest_rel = textures_root.path_join("Extra").path_join(source_abs.get_file())
-			var dest_abs := ProjectSettings.globalize_path(dest_rel)
-			_ensure_dir(dest_abs.get_base_dir())
-			var err := DirAccess.copy_absolute(source_abs, dest_abs)
+	if semantic_registry.get("ok", false):
+		var textures_by_key: Dictionary = semantic_registry.get("textures_by_key", {})
+		for source_key in REQUIRED_SOURCE_FILES.keys():
+			if textures_by_key.has(source_key):
+				var texture_info: Dictionary = textures_by_key[source_key]
+				var write_result := _write_texture_asset(textures_root, texture_info)
+				if not write_result.get("ok", false):
+					return write_result
+				copied[source_key] = write_result.get("res_path", "")
+		for optional_key in OPTIONAL_SOURCE_FILES.keys():
+			if textures_by_key.has(optional_key):
+				var optional_info: Dictionary = textures_by_key[optional_key]
+				var optional_result := _write_texture_asset(textures_root, optional_info)
+				if not optional_result.get("ok", false):
+					return optional_result
+				copied[optional_key] = optional_result.get("res_path", "")
+
+	if copied.is_empty():
+		var resolved: Dictionary = source_info.get("resolved_paths", {})
+		if source_info.get("source_kind", "") == "zip":
+			var reader := ZIPReader.new()
+			var err := reader.open(str(source_info.get("source_path", "")))
 			if err != OK:
-				return {"ok": false, "error": "Failed to copy %s" % source_abs}
-			copied[key] = dest_rel
-	else:
-		var reader := ZIPReader.new()
-		var err := reader.open(str(source_info.get("source_path", "")))
-		if err != OK:
-			return {"ok": false, "error": "Could not open zip for extraction."}
-		for key in resolved.keys():
-			var zip_entry := str(resolved[key])
-			var file_name := zip_entry.get_file()
-			var dest_rel_zip := textures_root.path_join(file_name)
-			if zip_entry.contains("/Extra/"):
-				dest_rel_zip = textures_root.path_join("Extra").path_join(file_name)
-			var dest_abs_zip := ProjectSettings.globalize_path(dest_rel_zip)
-			_ensure_dir(dest_abs_zip.get_base_dir())
-			var bytes := reader.read_file(zip_entry)
-			var file := FileAccess.open(dest_abs_zip, FileAccess.WRITE)
-			if file == null:
-				reader.close()
-				return {"ok": false, "error": "Could not write extracted file: %s" % dest_rel_zip}
-			file.store_buffer(bytes)
-			file.close()
-			copied[key] = dest_rel_zip
-		reader.close()
+				return {
+					"ok": false,
+					"error": "Could not open zip for texture copy.",
+				}
+			for key in resolved.keys():
+				var zip_entry := str(resolved[key])
+				var file_name := zip_entry.get_file()
+				var dest_rel := textures_root.path_join(file_name)
+				if zip_entry.contains("/Extra/"):
+					dest_rel = textures_root.path_join("Extra").path_join(file_name)
+				var dest_abs := ProjectSettings.globalize_path(dest_rel)
+				_ensure_dir(dest_abs.get_base_dir())
+				var file := FileAccess.open(dest_abs, FileAccess.WRITE)
+				if file == null:
+					reader.close()
+					return {
+						"ok": false,
+						"error": "Could not write %s" % dest_rel,
+					}
+				file.store_buffer(reader.read_file(zip_entry))
+				file.close()
+				copied[key] = dest_rel
+			reader.close()
+		else:
+			for key in resolved.keys():
+				var source_abs := str(resolved[key])
+				var dest_rel_folder := textures_root.path_join(source_abs.get_file())
+				if source_abs.contains("/Extra/"):
+					dest_rel_folder = textures_root.path_join("Extra").path_join(source_abs.get_file())
+				var dest_abs_folder := ProjectSettings.globalize_path(dest_rel_folder)
+				_ensure_dir(dest_abs_folder.get_base_dir())
+				var copy_err := DirAccess.copy_absolute(source_abs, dest_abs_folder)
+				if copy_err != OK:
+					return {
+						"ok": false,
+						"error": "Could not copy %s" % source_abs,
+					}
+				copied[key] = dest_rel_folder
 
-	return {"ok": true, "copied": copied}
+	return {
+		"ok": true,
+		"copied": copied,
+	}
+
+
+func _write_texture_asset(textures_root: String, texture_info: Dictionary) -> Dictionary:
+	var bytes: PackedByteArray = texture_info.get("asset_bytes", PackedByteArray())
+	if bytes.is_empty():
+		return {
+			"ok": false,
+			"error": "Missing texture bytes for %s" % str(texture_info.get("asset_path", "")),
+		}
+	var source_key := str(texture_info.get("source_key", ""))
+	var file_name := str(texture_info.get("asset_name", ""))
+	var dest_rel := textures_root.path_join(file_name)
+	if source_key.begins_with("extra_"):
+		dest_rel = textures_root.path_join("Extra").path_join(file_name)
+	var dest_abs := ProjectSettings.globalize_path(dest_rel)
+	_ensure_dir(dest_abs.get_base_dir())
+	var file := FileAccess.open(dest_abs, FileAccess.WRITE)
+	if file == null:
+		return {
+			"ok": false,
+			"error": "Could not write texture asset: %s" % dest_rel,
+		}
+	file.store_buffer(bytes)
+	file.close()
+	return {
+		"ok": true,
+		"res_path": dest_rel,
+	}
 
 
 func _generate_tileset(spec: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
 	var source_key := str(spec.get("key", ""))
 	var texture_res_path := str(copied_res_paths.get(source_key, ""))
-	var texture := _load_texture_resource(texture_res_path)
+	if texture_res_path.is_empty():
+		return {"ok": false, "error": "Missing texture for tileset %s" % source_key}
+
+	var texture := _external_texture_resource(texture_res_path)
 	if texture == null:
-		return {"ok": false, "error": "Could not load copied texture for %s" % source_key}
+		return {"ok": false, "error": "Could not load texture resource for %s" % texture_res_path}
+
 	var image := Image.load_from_file(ProjectSettings.globalize_path(texture_res_path))
-	if image == null or image.is_empty():
+	if image.is_empty():
 		return {"ok": false, "error": "Could not read image bytes for %s" % texture_res_path}
 
 	var tileset := TileSet.new()
 	tileset.tile_size = TILE_SIZE
-
 	var atlas_source := TileSetAtlasSource.new()
 	atlas_source.texture = texture
 	atlas_source.texture_region_size = TILE_SIZE
-	atlas_source.use_texture_padding = false
-	tileset.add_source(atlas_source)
 
-	for coords in _non_empty_cells(image):
-		atlas_source.create_tile(coords)
+	var image_size := image.get_size()
+	for y in range(image_size.y / TILE_SIZE.y):
+		for x in range(image_size.x / TILE_SIZE.x):
+			if _cell_has_alpha(image, x, y):
+				atlas_source.create_tile(Vector2i(x, y))
+	tileset.add_source(atlas_source, 0)
 
 	var output_path := _active_output_root.path_join(str(spec.get("output", "")))
 	var save_err := _save_resource(tileset, output_path)
 	if save_err != OK:
 		return {"ok": false, "error": "Failed to save tileset: %s" % output_path}
+	tileset.resource_path = output_path
 
 	return {
 		"ok": true,
 		"path": output_path,
+		"resource": tileset,
 		"catalog_entry": {
 			"name": str(spec.get("name", "")),
 			"path": output_path,
@@ -501,48 +707,273 @@ func _generate_tileset(spec: Dictionary, copied_res_paths: Dictionary) -> Dictio
 	}
 
 
+func _generate_semantic_prefab_collections(semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+	var paths := []
+	var catalog_entries := []
+	var family_to_paths := {
+		"plants": [],
+		"props": [],
+		"struct": [],
+		"player": [],
+	}
+	var tier_counts := {
+		"supported_static": 0,
+		"approximated": 0,
+		"manual_behavior": 0,
+		"unresolved_or_skipped": 0,
+	}
+	var sprites: Dictionary = semantic_registry.get("sprites", {})
+	var textures_by_guid := semantic_registry.get("textures_by_guid", {})
+	var texture_res_paths_by_guid := {}
+	for guid_variant in textures_by_guid.keys():
+		var guid := str(guid_variant)
+		var texture_info: Dictionary = textures_by_guid[guid]
+		var source_key := str(texture_info.get("source_key", ""))
+		if copied_res_paths.has(source_key):
+			texture_res_paths_by_guid[guid] = copied_res_paths[source_key]
+
+	for prefab_variant in semantic_registry.get("prefabs", []):
+		var prefab: Dictionary = prefab_variant
+		var tier := str(prefab.get("support_tier", "unresolved_or_skipped"))
+		if tier_counts.has(tier):
+			tier_counts[tier] += 1
+		else:
+			tier_counts["unresolved_or_skipped"] += 1
+
+		if tier == "unresolved_or_skipped":
+			continue
+
+		var scene_result := _generate_semantic_prefab_scene(prefab, sprites, texture_res_paths_by_guid)
+		if not scene_result.get("ok", false):
+			tier_counts["unresolved_or_skipped"] += 1
+			continue
+		var family := str(prefab.get("family", "props"))
+		paths.append(scene_result.get("path", ""))
+		family_to_paths[family].append(scene_result.get("path", ""))
+
+	var families := ["plants", "props", "struct", "player"]
+	for family in families:
+		var family_paths: Array = family_to_paths.get(family, [])
+		if family_paths.is_empty():
+			continue
+		catalog_entries.append({
+			"name": family,
+			"path": _active_output_root.path_join("scenes/prefabs/%s" % family),
+			"count": family_paths.size(),
+			"origin": "semantic_prefab",
+		})
+
+	return {
+		"ok": true,
+		"paths": paths,
+		"catalog_entries": catalog_entries,
+		"family_to_paths": family_to_paths,
+		"tier_counts": tier_counts,
+	}
+
+
+func _generate_semantic_prefab_scene(prefab: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Dictionary:
+	var family := str(prefab.get("family", "props"))
+	var output_dir := _active_output_root.path_join("scenes/prefabs/%s" % family)
+	_ensure_dir(ProjectSettings.globalize_path(output_dir))
+
+	var root_node := _build_semantic_prefab_root(prefab, sprites, texture_res_paths_by_guid)
+	if root_node == null:
+		return {"ok": false, "error": "Prefab has no roots: %s" % str(prefab.get("name", ""))}
+
+	_assign_scene_owner(root_node, root_node)
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(root_node)
+	if pack_err != OK:
+		root_node.free()
+		return {"ok": false, "error": "Could not pack semantic prefab %s" % str(prefab.get("name", ""))}
+
+	var scene_path := output_dir.path_join("%s.tscn" % _sanitize_filename(str(prefab.get("name", "prefab"))))
+	var save_err := _save_resource(packed, scene_path)
+	if save_err != OK:
+		root_node.free()
+		return {"ok": false, "error": "Could not save semantic prefab %s" % scene_path}
+	packed.resource_path = scene_path
+	root_node.free()
+	return {
+		"ok": true,
+		"path": scene_path,
+	}
+
+
+func _build_semantic_prefab_root(prefab: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Node2D:
+	var root_ids: Array = prefab.get("root_ids", [])
+	var nodes: Dictionary = prefab.get("nodes", {})
+	if root_ids.is_empty() or nodes.is_empty():
+		return null
+
+	var root_node := Node2D.new()
+	root_node.name = str(prefab.get("name", "Prefab"))
+	root_node.set_meta("semantic_origin", "unity_prefab")
+	root_node.set_meta("unity_path", str(prefab.get("path", "")))
+	root_node.set_meta("support_tier", str(prefab.get("support_tier", "")))
+	root_node.set_meta("unsupported_components", prefab.get("unsupported_components", []))
+
+	if root_ids.size() == 1 and nodes.has(str(root_ids[0])):
+		var root_desc: Dictionary = nodes[str(root_ids[0])]
+		_apply_game_object_to_node(root_node, root_desc, root_node, sprites, texture_res_paths_by_guid, true)
+		for child_id_variant in root_desc.get("children", []):
+			var child_id := str(child_id_variant)
+			if nodes.has(child_id):
+				root_node.add_child(_build_game_object_subtree(nodes[child_id], nodes, sprites, texture_res_paths_by_guid))
+	else:
+		for root_id_variant in root_ids:
+			var root_id := str(root_id_variant)
+			if nodes.has(root_id):
+				root_node.add_child(_build_game_object_subtree(nodes[root_id], nodes, sprites, texture_res_paths_by_guid))
+
+	return root_node
+
+
+func _build_game_object_subtree(node_desc: Dictionary, all_nodes: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Node2D:
+	var node := Node2D.new()
+	node.name = str(node_desc.get("name", "Node"))
+	_apply_game_object_to_node(node, node_desc, null, sprites, texture_res_paths_by_guid, false)
+	for child_id_variant in node_desc.get("children", []):
+		var child_id := str(child_id_variant)
+		if all_nodes.has(child_id):
+			node.add_child(_build_game_object_subtree(all_nodes[child_id], all_nodes, sprites, texture_res_paths_by_guid))
+	return node
+
+
+func _apply_game_object_to_node(node: Node2D, node_desc: Dictionary, scene_root: Node2D, sprites: Dictionary, texture_res_paths_by_guid: Dictionary, is_scene_root: bool) -> void:
+	var ppu := _node_pixels_per_unit(node_desc, sprites)
+	var local_position: Vector3 = node_desc.get("local_position", Vector3.ZERO)
+	if not is_scene_root:
+		node.position = Vector2(local_position.x * ppu, -local_position.y * ppu)
+
+	for renderer_variant in node_desc.get("sprite_renderers", []):
+		var renderer: Dictionary = renderer_variant
+		var sprite_key := "%s:%s" % [str(renderer.get("sprite_guid", "")), str(renderer.get("sprite_file_id", ""))]
+		if not sprites.has(sprite_key):
+			continue
+		var sprite_desc: Dictionary = sprites[sprite_key]
+		var texture_guid := str(sprite_desc.get("texture_guid", ""))
+		if not texture_res_paths_by_guid.has(texture_guid):
+			continue
+		var texture_res_path := str(texture_res_paths_by_guid.get(texture_guid, ""))
+		var texture := _external_texture_resource(texture_res_path)
+		if texture == null:
+			continue
+		var sprite_node := Sprite2D.new()
+		sprite_node.name = "%s Sprite" % str(node_desc.get("name", "Visual"))
+		sprite_node.texture = texture
+		sprite_node.region_enabled = true
+		sprite_node.region_rect = sprite_desc.get("rect", Rect2())
+		sprite_node.centered = false
+		sprite_node.position = _sprite_top_left_offset(sprite_desc)
+		sprite_node.flip_h = bool(renderer.get("flip_x", false))
+		sprite_node.flip_v = bool(renderer.get("flip_y", false))
+		sprite_node.z_index = int(renderer.get("sorting_order", 0))
+		sprite_node.texture_filter = TEXTURE_FILTER_NEAREST
+		sprite_node.set_meta("sorting_layer_id", int(renderer.get("sorting_layer_id", 0)))
+		sprite_node.set_meta("sprite_name", str(sprite_desc.get("name", "")))
+		node.add_child(sprite_node)
+
+	var collider_index := 0
+	for collider_variant in node_desc.get("box_colliders", []):
+		var collider: Dictionary = collider_variant
+		var owner: Node2D = Area2D.new() if collider.get("is_trigger", false) else StaticBody2D.new()
+		owner.name = "BoxCollider_%d" % collider_index
+		owner.position = _unity_vector2_to_godot_px(collider.get("offset", Vector2.ZERO), ppu)
+		var shape := RectangleShape2D.new()
+		shape.size = collider.get("size", Vector2.ZERO) * ppu
+		var shape_node := CollisionShape2D.new()
+		shape_node.shape = shape
+		owner.add_child(shape_node)
+		node.add_child(owner)
+		collider_index += 1
+
+	for collider_variant in node_desc.get("edge_colliders", []):
+		var collider: Dictionary = collider_variant
+		var points: Array = collider.get("points", [])
+		if points.size() != 2:
+			continue
+		var owner: Node2D = Area2D.new() if collider.get("is_trigger", false) else StaticBody2D.new()
+		owner.name = "EdgeCollider_%d" % collider_index
+		owner.position = _unity_vector2_to_godot_px(collider.get("offset", Vector2.ZERO), ppu)
+		var shape := SegmentShape2D.new()
+		shape.a = _unity_vector2_to_godot_px(points[0], ppu)
+		shape.b = _unity_vector2_to_godot_px(points[1], ppu)
+		var shape_node := CollisionShape2D.new()
+		shape_node.shape = shape
+		owner.add_child(shape_node)
+		node.add_child(owner)
+		collider_index += 1
+
+	if not node_desc.get("mono_behaviours", []).is_empty():
+		node.set_meta("unity_mono_behaviours", node_desc.get("mono_behaviours", []))
+
+
+func _node_pixels_per_unit(node_desc: Dictionary, sprites: Dictionary) -> float:
+	for renderer_variant in node_desc.get("sprite_renderers", []):
+		var renderer: Dictionary = renderer_variant
+		var sprite_key := "%s:%s" % [str(renderer.get("sprite_guid", "")), str(renderer.get("sprite_file_id", ""))]
+		if sprites.has(sprite_key):
+			return float(sprites[sprite_key].get("pixels_per_unit", DEFAULT_PPU))
+	return DEFAULT_PPU
+
+
+func _sprite_top_left_offset(sprite_desc: Dictionary) -> Vector2:
+	var rect: Rect2 = sprite_desc.get("rect", Rect2())
+	var pivot: Vector2 = sprite_desc.get("pivot", Vector2(0.5, 0.5))
+	var pivot_x := rect.size.x * pivot.x
+	var pivot_y := rect.size.y * pivot.y
+	return Vector2(-pivot_x, -(rect.size.y - pivot_y))
+
+
+func _unity_vector2_to_godot_px(value: Vector2, ppu: float) -> Vector2:
+	return Vector2(value.x * ppu, -value.y * ppu)
+
+
 func _generate_sprite_scene_collection(collection_name: String, texture_res_path: String, output_dir_rel: String, prefix: String) -> Dictionary:
 	if texture_res_path.is_empty():
-		return {"ok": true, "paths": [], "catalog_entry": {"name": collection_name, "path": "", "count": 0}}
+		return {"ok": true, "paths": [], "catalog_entry": {"name": collection_name, "path": "", "count": 0, "origin": "fallback_atlas"}}
 
-	var texture := _load_texture_resource(texture_res_path)
+	var texture := _external_texture_resource(texture_res_path)
 	if texture == null:
 		return {"ok": false, "error": "Could not load texture for scene collection: %s" % texture_res_path}
 	var image := Image.load_from_file(ProjectSettings.globalize_path(texture_res_path))
-	if image == null or image.is_empty():
+	if image.is_empty():
 		return {"ok": false, "error": "Could not load image for scene collection: %s" % texture_res_path}
 
 	var output_dir := _active_output_root.path_join(output_dir_rel)
 	_ensure_dir(ProjectSettings.globalize_path(output_dir))
 
-	var paths: Array[String] = []
+	var paths := []
 	for coords in _non_empty_cells(image):
 		var root := Node2D.new()
 		root.name = "%s_%02d_%02d" % [prefix, coords.x, coords.y]
-		root.set_meta("atlas_coords", coords)
 		root.set_meta("atlas_source", texture_res_path)
+		root.set_meta("atlas_coords", coords)
 
 		var sprite := Sprite2D.new()
-		sprite.name = "Sprite"
+		sprite.texture = texture
+		sprite.region_enabled = true
+		sprite.region_rect = Rect2(coords * TILE_SIZE, TILE_SIZE)
 		sprite.centered = false
-		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		var atlas_texture := AtlasTexture.new()
-		atlas_texture.atlas = texture
-		atlas_texture.region = Rect2(coords * TILE_SIZE, TILE_SIZE)
-		sprite.texture = atlas_texture
+		sprite.texture_filter = TEXTURE_FILTER_NEAREST
 		root.add_child(sprite)
-		sprite.owner = root
+		_assign_scene_owner(root, root)
 
 		var packed := PackedScene.new()
 		var pack_err := packed.pack(root)
 		if pack_err != OK:
-			return {"ok": false, "error": "Could not pack scene for %s" % root.name}
+			root.free()
+			return {"ok": false, "error": "Could not pack scene collection %s" % collection_name}
 		var scene_path := output_dir.path_join("%s_%02d_%02d.tscn" % [prefix, coords.x, coords.y])
 		var save_err := _save_resource(packed, scene_path)
-		root.free()
 		if save_err != OK:
+			root.free()
 			return {"ok": false, "error": "Could not save scene %s" % scene_path}
 		paths.append(scene_path)
+		root.free()
 
 	return {
 		"ok": true,
@@ -551,147 +982,153 @@ func _generate_sprite_scene_collection(collection_name: String, texture_res_path
 			"name": collection_name,
 			"path": output_dir,
 			"count": paths.size(),
+			"origin": "fallback_atlas",
 		},
 	}
 
 
-func _generate_player_assets(player_texture_res_path: String) -> Dictionary:
-	var texture := _load_texture_resource(player_texture_res_path)
+func _generate_player_helper_assets(player_texture_res_path: String) -> Dictionary:
+	var texture := _external_texture_resource(player_texture_res_path)
 	if texture == null:
-		return {"ok": false, "error": "Could not load player texture."}
+		return {"ok": false, "error": "Could not load player texture resource."}
 	var image := Image.load_from_file(ProjectSettings.globalize_path(player_texture_res_path))
-	if image == null or image.is_empty():
-		return {"ok": false, "error": "Could not read player image."}
+	if image.is_empty():
+		return {"ok": false, "error": "Could not load player texture image."}
 
-	var output_dir := _active_output_root.path_join("animations/player")
+	var output_dir := _active_output_root.path_join("helpers/player")
 	_ensure_dir(ProjectSettings.globalize_path(output_dir))
 
 	var frames := SpriteFrames.new()
 	var rows := _non_empty_cells_by_row(image)
-	for row_key in rows.keys():
+	for row_key_variant in rows.keys():
+		var row_key := int(row_key_variant)
 		var animation_name := "sheet_row_%d" % row_key
 		frames.add_animation(animation_name)
-		frames.set_animation_speed(animation_name, 6.0)
-		for coords in rows[row_key]:
+		for coords_variant in rows[row_key]:
+			var coords: Vector2i = coords_variant
 			var atlas_texture := AtlasTexture.new()
 			atlas_texture.atlas = texture
 			atlas_texture.region = Rect2(coords * TILE_SIZE, TILE_SIZE)
 			frames.add_frame(animation_name, atlas_texture)
+		frames.set_animation_loop(animation_name, true)
+		frames.set_animation_speed(animation_name, 8.0)
 
 	var frames_path := output_dir.path_join("basic_player_frames.tres")
-	var frames_save_err := _save_resource(frames, frames_path)
-	if frames_save_err != OK:
-		return {"ok": false, "error": "Could not save player SpriteFrames resource."}
+	if _save_resource(frames, frames_path) != OK:
+		return {"ok": false, "error": "Could not save player SpriteFrames."}
+	frames.resource_path = frames_path
 
 	var root := Node2D.new()
-	root.name = "BasicPlayerPreview"
-
+	root.name = "basic_player_helper"
 	var animated := AnimatedSprite2D.new()
 	animated.name = "AnimatedSprite2D"
 	animated.sprite_frames = frames
-	animated.animation = "sheet_row_1" if rows.has(1) else "sheet_row_0"
-	animated.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	if frames.get_animation_names().size() > 0:
+		animated.animation = frames.get_animation_names()[0]
+	animated.texture_filter = TEXTURE_FILTER_NEAREST
 	root.add_child(animated)
-	animated.owner = root
+	_assign_scene_owner(root, root)
 
 	var packed := PackedScene.new()
-	var pack_err := packed.pack(root)
-	if pack_err != OK:
-		return {"ok": false, "error": "Could not pack player preview scene."}
-	var scene_path := output_dir.path_join("basic_player_preview.tscn")
-	var scene_save_err := _save_resource(packed, scene_path)
+	if packed.pack(root) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack player helper scene."}
+	var scene_path := output_dir.path_join("basic_player_helper.tscn")
+	if _save_resource(packed, scene_path) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save player helper scene."}
+	packed.resource_path = scene_path
 	root.free()
-	if scene_save_err != OK:
-		return {"ok": false, "error": "Could not save player preview scene."}
 
 	return {
 		"ok": true,
 		"paths": [frames_path, scene_path],
+		"packed_scene": packed,
+		"frames": frames,
 		"catalog_entry": {
-			"name": "player_assets",
+			"name": "player_helpers",
 			"path": output_dir,
 			"count": 2,
+			"origin": "helper",
 		},
 	}
 
 
-func _generate_preview_scene(copied_res_paths: Dictionary, generated_scenes: Dictionary, player_output: Dictionary) -> Dictionary:
+func _generate_preview_scene(generated_tilesets: Dictionary, copied_res_paths: Dictionary, semantic_registry: Dictionary, semantic_generated: Dictionary, player_helpers: Dictionary) -> Dictionary:
+	var helper_entries := []
+	var helper_paths := []
+
+	var preview := _build_preview_map_scene(generated_tilesets, copied_res_paths, semantic_registry, player_helpers)
+	if not preview.get("ok", false):
+		return preview
+	helper_paths.append(preview.get("path", ""))
+	helper_entries.append(preview.get("catalog_entry", {}))
+
+	var catalog := _build_prefab_catalog_scene(semantic_registry, copied_res_paths)
+	if not catalog.get("ok", false):
+		return catalog
+	helper_paths.append(catalog.get("path", ""))
+	helper_entries.append(catalog.get("catalog_entry", {}))
+
+	return {
+		"ok": true,
+		"paths": helper_paths,
+		"catalog_entries": helper_entries,
+	}
+
+
+func _build_preview_map_scene(generated_tilesets: Dictionary, copied_res_paths: Dictionary, semantic_registry: Dictionary, player_helpers: Dictionary) -> Dictionary:
 	var root := Node2D.new()
-	root.name = "BasicPackPreview"
+	root.name = "basic_preview_map"
 
-	var grass_tileset := load(_active_output_root.path_join("tilesets/basic_grass_tileset.tres")) as TileSet
-	var stone_tileset := load(_active_output_root.path_join("tilesets/basic_stone_ground_tileset.tres")) as TileSet
-	var wall_tileset := load(_active_output_root.path_join("tilesets/basic_wall_tileset.tres")) as TileSet
-	var struct_tileset := load(_active_output_root.path_join("tilesets/basic_struct_tileset.tres")) as TileSet
-	if grass_tileset == null or stone_tileset == null or wall_tileset == null or struct_tileset == null:
-		return {"ok": false, "error": "Could not reload generated tilesets for preview scene."}
+	var grass_tileset := generated_tilesets.get("tileset_grass") as TileSet
+	var stone_tileset := generated_tilesets.get("tileset_stone_ground") as TileSet
+	var wall_tileset := generated_tilesets.get("tileset_wall") as TileSet
+	var struct_tileset := generated_tilesets.get("struct") as TileSet
+	if grass_tileset != null:
+		var grass := _make_tile_layer("Grass", grass_tileset, 0)
+		_fill_preview_layer(grass, 0)
+		root.add_child(grass)
+	if stone_tileset != null:
+		var stone := _make_tile_layer("Stone", stone_tileset, 1)
+		_fill_preview_layer(stone, 1)
+		root.add_child(stone)
+	if wall_tileset != null:
+		var wall := _make_tile_layer("Wall", wall_tileset, 2)
+		_fill_preview_layer(wall, 2)
+		root.add_child(wall)
+	if struct_tileset != null:
+		var struct_layer := _make_tile_layer("Struct", struct_tileset, 3)
+		_fill_preview_layer(struct_layer, 3)
+		root.add_child(struct_layer)
 
-	var grass := _make_tile_layer("Grass", grass_tileset, 0)
-	var stone := _make_tile_layer("Stone", stone_tileset, 1)
-	var wall := _make_tile_layer("Wall", wall_tileset, 2)
-	var struct_layer := _make_tile_layer("Struct", struct_tileset, 3)
-	for node in [grass, stone, wall, struct_layer]:
-		root.add_child(node)
-		node.owner = root
-
-	for x in range(10):
-		for y in range(7):
-			grass.set_cell(Vector2i(x, y), 0, Vector2i(0, 0))
-
-	for x in range(2, 8):
-		stone.set_cell(Vector2i(x, 4), 0, Vector2i(0, 0))
-	for x in range(0, 10):
-		wall.set_cell(Vector2i(x, 0), 0, Vector2i(0, 0))
-	struct_layer.set_cell(Vector2i(4, 2), 0, Vector2i(0, 0))
-	struct_layer.set_cell(Vector2i(5, 2), 0, Vector2i(1, 0))
-
-	var prop_paths: Array = generated_scenes.get("shadow_props", [])
-	if prop_paths.is_empty():
-		prop_paths = generated_scenes.get("plain_props", [])
-	if not prop_paths.is_empty():
-		var prop_scene := load(prop_paths[0]) as PackedScene
-		if prop_scene != null:
-			var prop_instance := prop_scene.instantiate()
-			prop_instance.position = Vector2(96, 96)
-			root.add_child(prop_instance)
-			prop_instance.owner = root
-
-	var plant_paths: Array = generated_scenes.get("shadow_plants", [])
-	if plant_paths.is_empty():
-		plant_paths = generated_scenes.get("plain_plants", [])
-	if not plant_paths.is_empty():
-		var plant_scene := load(plant_paths[0]) as PackedScene
-		if plant_scene != null:
-			var plant_instance := plant_scene.instantiate()
-			plant_instance.position = Vector2(224, 128)
-			root.add_child(plant_instance)
-			plant_instance.owner = root
-
-	var player_paths: Array = player_output.get("paths", [])
-	if player_paths.size() > 1:
-		var player_scene := load(player_paths[1]) as PackedScene
+	var semantic_preview := _build_semantic_preview_lookup(semantic_registry, copied_res_paths)
+	_instantiate_first_semantic_prefab(root, semantic_preview, "props", Vector2(48, 64))
+	_instantiate_first_semantic_prefab(root, semantic_preview, "plants", Vector2(112, 72))
+	_instantiate_first_semantic_prefab(root, semantic_preview, "struct", Vector2(176, 96))
+	if not _instantiate_first_semantic_prefab(root, semantic_preview, "player", Vector2(240, 80)):
+		var player_scene := player_helpers.get("packed_scene") as PackedScene
 		if player_scene != null:
 			var player_instance := player_scene.instantiate()
-			player_instance.position = Vector2(160, 160)
+			if player_instance is Node2D:
+				player_instance.position = Vector2(240, 80)
 			root.add_child(player_instance)
-			player_instance.owner = root
 
 	var camera := Camera2D.new()
-	camera.name = "Camera2D"
-	camera.enabled = true
-	camera.position = Vector2(160, 112)
+	camera.position = Vector2(128, 96)
+	camera.zoom = Vector2(1.2, 1.2)
 	root.add_child(camera)
-	camera.owner = root
+	_assign_scene_owner(root, root)
 
 	var packed := PackedScene.new()
-	var pack_err := packed.pack(root)
-	if pack_err != OK:
-		return {"ok": false, "error": "Could not pack preview scene."}
+	if packed.pack(root) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack preview map scene."}
 	var scene_path := _active_output_root.path_join("scenes/helpers/basic_preview_map.tscn")
-	var save_err := _save_resource(packed, scene_path)
+	if _save_resource(packed, scene_path) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save preview map scene."}
 	root.free()
-	if save_err != OK:
-		return {"ok": false, "error": "Could not save preview scene."}
 	return {
 		"ok": true,
 		"path": scene_path,
@@ -702,43 +1139,151 @@ func _generate_preview_scene(copied_res_paths: Dictionary, generated_scenes: Dic
 	}
 
 
+func _build_prefab_catalog_scene(semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+	var root := Node2D.new()
+	root.name = "basic_prefab_catalog"
+
+	var semantic_preview := _build_semantic_preview_lookup(semantic_registry, copied_res_paths)
+	var categories := [
+		{"name": "plants", "family": "plants"},
+		{"name": "props", "family": "props"},
+		{"name": "struct", "family": "struct"},
+	]
+	var origin := Vector2(32, 48)
+	for index in range(categories.size()):
+		var category: Dictionary = categories[index]
+		var family := str(category.get("family", ""))
+		var prefabs: Array = semantic_preview.get(family, [])
+		var row_y := origin.y + index * 96.0
+		for path_index in range(min(prefabs.size(), 4)):
+			var instance_position := Vector2(origin.x + path_index * 80.0, row_y)
+			_instantiate_specific_semantic_prefab(root, semantic_preview, prefabs[path_index], instance_position)
+
+	_assign_scene_owner(root, root)
+
+	var packed := PackedScene.new()
+	if packed.pack(root) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack prefab catalog scene."}
+	var scene_path := _active_output_root.path_join("scenes/helpers/basic_prefab_catalog.tscn")
+	if _save_resource(packed, scene_path) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save prefab catalog scene."}
+	root.free()
+	return {
+		"ok": true,
+		"path": scene_path,
+		"catalog_entry": {
+			"name": "basic_prefab_catalog",
+			"path": scene_path,
+		},
+	}
+
+
+func _build_semantic_preview_lookup(semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+	var preview := {
+		"plants": [],
+		"props": [],
+		"struct": [],
+		"player": [],
+		"sprites": semantic_registry.get("sprites", {}),
+		"texture_res_paths_by_guid": {},
+	}
+	if not semantic_registry.get("ok", false):
+		return preview
+
+	var textures_by_guid: Dictionary = semantic_registry.get("textures_by_guid", {})
+	for guid_variant in textures_by_guid.keys():
+		var guid := str(guid_variant)
+		var texture_info: Dictionary = textures_by_guid[guid]
+		var source_key := str(texture_info.get("source_key", ""))
+		if copied_res_paths.has(source_key):
+			preview["texture_res_paths_by_guid"][guid] = copied_res_paths[source_key]
+
+	for prefab_variant in semantic_registry.get("prefabs", []):
+		var prefab: Dictionary = prefab_variant
+		var tier := str(prefab.get("support_tier", ""))
+		if tier == "unresolved_or_skipped":
+			continue
+		var family := str(prefab.get("family", "props"))
+		if preview.has(family):
+			preview[family].append(prefab)
+
+	return preview
+
+
+func _instantiate_first_semantic_prefab(parent: Node, semantic_preview: Dictionary, family: String, position: Vector2) -> bool:
+	var prefabs: Array = semantic_preview.get(family, [])
+	if prefabs.is_empty():
+		return false
+	return _instantiate_specific_semantic_prefab(parent, semantic_preview, prefabs[0], position)
+
+
+func _instantiate_specific_semantic_prefab(parent: Node, semantic_preview: Dictionary, prefab: Dictionary, position: Vector2) -> bool:
+	var sprites: Dictionary = semantic_preview.get("sprites", {})
+	var texture_res_paths_by_guid: Dictionary = semantic_preview.get("texture_res_paths_by_guid", {})
+	var root := _build_semantic_prefab_root(prefab, sprites, texture_res_paths_by_guid)
+	if root == null:
+		return false
+	root.position = position
+	parent.add_child(root)
+	return true
+
+
+func _assign_scene_owner(node: Node, owner: Node) -> void:
+	for child in node.get_children():
+		child.owner = owner
+		_assign_scene_owner(child, owner)
+
+
+func _fill_preview_layer(layer: TileMapLayer, z_index: int) -> void:
+	if layer.tile_set == null or layer.tile_set.get_source_count() == 0:
+		return
+	var source_id := layer.tile_set.get_source_id(0)
+	for x in range(6):
+		for y in range(4):
+			layer.set_cell(Vector2i(x, y), source_id, Vector2i(0, 0))
+	if z_index == 1:
+		layer.set_cell(Vector2i(2, 2), source_id, Vector2i(1, 0))
+		layer.set_cell(Vector2i(3, 2), source_id, Vector2i(2, 0))
+	if z_index == 2:
+		for x in range(6):
+			layer.set_cell(Vector2i(x, 0), source_id, Vector2i(0, 0))
+	if z_index == 3:
+		layer.set_cell(Vector2i(4, 1), source_id, Vector2i(0, 0))
+
+
 func _make_tile_layer(name: String, tileset: TileSet, z_index: int) -> TileMapLayer:
 	var layer := TileMapLayer.new()
 	layer.name = name
 	layer.tile_set = tileset
 	layer.z_index = z_index
-	layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	layer.texture_filter = TEXTURE_FILTER_NEAREST
 	return layer
 
 
 func _write_reports(output_root: String, manifest: Dictionary, compatibility: Array, catalog: Dictionary) -> Dictionary:
 	var reports_root := output_root.path_join("reports")
-	var reports_root_abs := ProjectSettings.globalize_path(reports_root)
-	_ensure_dir(reports_root_abs)
+	_ensure_dir(ProjectSettings.globalize_path(reports_root))
 
 	var manifest_path := reports_root.path_join("import_manifest.json")
-	var manifest_err := _write_text_file(manifest_path, JSON.stringify(manifest, "\t", true))
-	if manifest_err != OK:
+	if _write_text_file(manifest_path, JSON.stringify(manifest, "\t", true)) != OK:
 		return {"ok": false, "error": "Could not write manifest."}
 
 	var compatibility_json := reports_root.path_join("compatibility_report.json")
-	var compatibility_err := _write_text_file(compatibility_json, JSON.stringify(compatibility, "\t", true))
-	if compatibility_err != OK:
-		return {"ok": false, "error": "Could not write compatibility JSON."}
+	if _write_text_file(compatibility_json, JSON.stringify(compatibility, "\t", true)) != OK:
+		return {"ok": false, "error": "Could not write compatibility report JSON."}
 
 	var compatibility_md := reports_root.path_join("compatibility_report.md")
-	var compatibility_md_err := _write_text_file(compatibility_md, _compatibility_markdown(compatibility))
-	if compatibility_md_err != OK:
-		return {"ok": false, "error": "Could not write compatibility markdown."}
+	if _write_text_file(compatibility_md, _compatibility_markdown(compatibility)) != OK:
+		return {"ok": false, "error": "Could not write compatibility report markdown."}
 
 	var catalog_json := reports_root.path_join("asset_catalog.json")
-	var catalog_json_err := _write_text_file(catalog_json, JSON.stringify(catalog, "\t", true))
-	if catalog_json_err != OK:
+	if _write_text_file(catalog_json, JSON.stringify(catalog, "\t", true)) != OK:
 		return {"ok": false, "error": "Could not write asset catalog JSON."}
 
 	var catalog_md := reports_root.path_join("asset_catalog.md")
-	var catalog_md_err := _write_text_file(catalog_md, _catalog_markdown(catalog))
-	if catalog_md_err != OK:
+	if _write_text_file(catalog_md, _catalog_markdown(catalog)) != OK:
 		return {"ok": false, "error": "Could not write asset catalog markdown."}
 
 	return {
@@ -758,15 +1303,15 @@ func _compatibility_markdown(compatibility: Array) -> String:
 		"- supported: imported directly into usable Godot assets",
 		"- approximated: usable, but not a one-to-one Unity mapping",
 		"- manual: requires user follow-up in Godot",
-		"- unsupported: not converted in v1",
+		"- unsupported: not converted in this milestone",
 		"",
 	]
 	for item_variant in compatibility:
 		var item: Dictionary = item_variant
-		lines.append("## %s" % item.get("family", "Unknown"))
-		lines.append("- Status: %s" % item.get("status", "unknown"))
+		lines.append("## %s" % item.get("title", ""))
+		lines.append("- Status: %s" % item.get("status", ""))
 		lines.append("- Detail: %s" % item.get("detail", ""))
-		lines.append("- Next: %s" % item.get("next_action", ""))
+		lines.append("- Next: %s" % item.get("next", ""))
 		lines.append("")
 	return "\n".join(lines)
 
@@ -780,13 +1325,11 @@ func _catalog_markdown(catalog: Dictionary) -> String:
 	for item_variant in catalog.get("tilesets", []):
 		var item: Dictionary = item_variant
 		lines.append("- %s: %s (%s tiles)" % [item.get("name", ""), item.get("path", ""), item.get("tile_count", 0)])
-
 	lines.append("")
 	lines.append("## Scene Collections")
 	for collection_variant in catalog.get("scene_collections", []):
 		var collection: Dictionary = collection_variant
-		lines.append("- %s: %s (%s items)" % [collection.get("name", ""), collection.get("path", ""), collection.get("count", 0)])
-
+		lines.append("- %s: %s (%s items, origin=%s)" % [collection.get("name", ""), collection.get("path", ""), collection.get("count", 0), collection.get("origin", "")])
 	lines.append("")
 	lines.append("## Helper Scenes")
 	for helper_variant in catalog.get("helper_scenes", []):
@@ -798,34 +1341,64 @@ func _catalog_markdown(catalog: Dictionary) -> String:
 func _wait_for_import(resource_paths: Array) -> void:
 	if _editor_interface == null:
 		return
-	var filesystem := _editor_interface.get_resource_filesystem()
-	if filesystem == null:
-		return
+	var filesystem = _editor_interface.get_resource_filesystem()
 	filesystem.scan()
-	await filesystem.filesystem_changed
 	for resource_path_variant in resource_paths:
 		var resource_path := str(resource_path_variant)
 		var attempts := 0
-		while attempts < 60:
+		while attempts < 120:
 			if ResourceLoader.exists(resource_path):
 				break
+			await _editor_interface.get_tree().create_timer(0.1).timeout
 			attempts += 1
-			await _editor_interface.get_base_control().get_tree().process_frame
 
 
-func _load_texture_resource(res_path: String) -> Texture2D:
+func _external_texture_resource(res_path: String) -> Texture2D:
 	if ResourceLoader.exists(res_path):
-		var texture := load(res_path) as Texture2D
-		if texture != null:
-			return texture
+		var imported_texture := load(res_path) as Texture2D
+		if imported_texture != null:
+			return imported_texture
 	var image := Image.load_from_file(ProjectSettings.globalize_path(res_path))
-	if image == null or image.is_empty():
+	if image.is_empty():
 		return null
-	return ImageTexture.create_from_image(image)
+	var texture := ImageTexture.create_from_image(image)
+	texture.resource_path = res_path
+	return texture
 
 
-func _non_empty_cells(image: Image) -> Array[Vector2i]:
-	var coords: Array[Vector2i] = []
+func _load_source_image(probe: Dictionary, key: String, semantic_registry: Dictionary) -> Image:
+	if semantic_registry.get("ok", false):
+		var textures_by_key: Dictionary = semantic_registry.get("textures_by_key", {})
+		if textures_by_key.has(key):
+			var bytes: PackedByteArray = textures_by_key[key].get("asset_bytes", PackedByteArray())
+			if not bytes.is_empty():
+				var semantic_image := Image.new()
+				if semantic_image.load_png_from_buffer(bytes) == OK:
+					return semantic_image
+
+	var resolved: Dictionary = probe.get("resolved_paths", {})
+	if not resolved.has(key):
+		return Image.new()
+
+	if probe.get("source_kind", "") == "zip":
+		var reader := ZIPReader.new()
+		var err := reader.open(str(probe.get("source_path", "")))
+		if err != OK:
+			return Image.new()
+		var bytes := reader.read_file(str(resolved[key]))
+		reader.close()
+		var image := Image.new()
+		if image.load_png_from_buffer(bytes) == OK:
+			return image
+		return Image.new()
+
+	return Image.load_from_file(str(resolved[key]))
+
+
+func _non_empty_cells(image: Image) -> Array:
+	var coords := []
+	if image.is_empty():
+		return coords
 	var width := image.get_width() / TILE_SIZE.x
 	var height := image.get_height() / TILE_SIZE.y
 	for y in range(height):
@@ -841,8 +1414,6 @@ func _non_empty_cells_by_row(image: Image) -> Dictionary:
 		if not rows.has(coords.y):
 			rows[coords.y] = []
 		rows[coords.y].append(coords)
-	for row_key in rows.keys():
-		rows[row_key].sort_custom(func(a: Vector2i, b: Vector2i): return a.x < b.x)
 	return rows
 
 
@@ -850,31 +1421,18 @@ func _cell_has_alpha(image: Image, tile_x: int, tile_y: int) -> bool:
 	var origin := Vector2i(tile_x, tile_y) * TILE_SIZE
 	for y in range(TILE_SIZE.y):
 		for x in range(TILE_SIZE.x):
-			if image.get_pixel(origin.x + x, origin.y + y).a > 0.0:
+			if image.get_pixel(origin.x + x, origin.y + y).a > 0.01:
 				return true
 	return false
 
 
-func _load_source_image(probe: Dictionary, key: String) -> Image:
-	var resolved: Dictionary = probe.get("resolved_paths", {})
-	if not resolved.has(key):
-		return null
-	if probe.get("source_kind", "") == "folder":
-		return Image.load_from_file(str(resolved[key]))
+func _semantic_source_kind_label(source_info: Dictionary) -> String:
+	var semantic_source: Dictionary = source_info.get("semantic_source", {})
+	return str(semantic_source.get("kind", ""))
 
-	var reader := ZIPReader.new()
-	var err := reader.open(str(probe.get("source_path", "")))
-	if err != OK:
-		return null
-	var bytes := reader.read_file(str(resolved[key]))
-	reader.close()
-	if bytes.is_empty():
-		return null
-	var image := Image.new()
-	var load_err := image.load_png_from_buffer(bytes)
-	if load_err != OK:
-		return null
-	return image
+
+func _sanitize_filename(value: String) -> String:
+	return value.replace("/", "-").replace("\\", "-").replace(":", "").replace("*", "").replace("?", "").replace("\"", "").replace("<", "").replace(">", "").replace("|", "")
 
 
 func _sha256_file(path: String) -> String:
@@ -898,13 +1456,20 @@ func _sha256_folder_probe(resolved_paths: Dictionary) -> String:
 		var key := str(key_variant)
 		var path := str(resolved_paths[key])
 		ctx.update(key.to_utf8_buffer())
-		ctx.update(path.to_utf8_buffer())
 		var file := FileAccess.open(path, FileAccess.READ)
 		if file != null:
 			while not file.eof_reached():
 				ctx.update(file.get_buffer(65536))
 			file.close()
 	return ctx.finish().hex_encode()
+
+
+func _metadata_files_for_hash(root_path: String) -> Dictionary:
+	var files := {}
+	for file_path in _list_files_recursive(root_path):
+		if file_path.ends_with(".prefab") or file_path.ends_with(".meta") or file_path.ends_with(".png"):
+			files[file_path.trim_prefix(root_path).trim_prefix("/")] = file_path
+	return files
 
 
 func _sha256_text(text: String) -> String:
@@ -924,7 +1489,7 @@ func _write_text_file(res_path: String, content: String) -> int:
 	_ensure_dir(abs_path.get_base_dir())
 	var file := FileAccess.open(abs_path, FileAccess.WRITE)
 	if file == null:
-		return ERR_CANT_CREATE
+		return ERR_CANT_OPEN
 	file.store_string(content)
 	file.close()
 	return OK
@@ -943,13 +1508,13 @@ func _remove_tree_absolute(abs_path: String) -> void:
 	var dir := DirAccess.open(abs_path)
 	if dir == null:
 		return
+	dir.include_hidden = true
+	dir.include_navigational = false
 	dir.list_dir_begin()
 	while true:
 		var name := dir.get_next()
 		if name.is_empty():
 			break
-		if name == "." or name == "..":
-			continue
 		var child := abs_path.path_join(name)
 		if dir.current_is_dir():
 			_remove_tree_absolute(child)
@@ -957,6 +1522,27 @@ func _remove_tree_absolute(abs_path: String) -> void:
 			DirAccess.remove_absolute(child)
 	dir.list_dir_end()
 	DirAccess.remove_absolute(abs_path)
+
+
+func _list_files_recursive(root_path: String) -> Array:
+	var files := []
+	var dir := DirAccess.open(root_path)
+	if dir == null:
+		return files
+	dir.include_hidden = false
+	dir.include_navigational = false
+	dir.list_dir_begin()
+	while true:
+		var name := dir.get_next()
+		if name.is_empty():
+			break
+		var child := root_path.path_join(name)
+		if dir.current_is_dir():
+			files.append_array(_list_files_recursive(child))
+		else:
+			files.append(child)
+	dir.list_dir_end()
+	return files
 
 
 func _log_message(message: String) -> void:

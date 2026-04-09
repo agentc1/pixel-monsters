@@ -6,24 +6,26 @@ This importer is authoring-first. It does not attempt full Unity parity in v1.
 
 - atlas textures copied into the project
 - paintable `TileSet` resources
-- generic prop and plant scenes from atlas cells
-- a player preview resource and scene
+- named prefab scenes for the supported static Basic prefabs
+- simple `BoxCollider2D` and 2-point `EdgeCollider2D` mappings where they are straightforward
+- helper scenes for preview and prefab browsing
 
 ## Approximated
 
-- baked-shadow helper scenes from the `Extra/` atlases
-- player animations as row-based Godot `SpriteFrames`, not exact Unity controller behavior
+- prefabs with partial collision fidelity where Unity uses unsupported collider/runtime features
+- fallback atlas-cell scenes when semantic prefab import is unavailable or disabled
+- player helper animation assets, which are preview-oriented rather than a full Unity controller conversion
 
 ## Manual in v1
 
-- one-to-one reconstruction of named Unity prefabs
+- prefabs with MonoBehaviour-driven behavior such as stairs or trigger logic
 - rebuilding the Unity demo scenes
-- exact sorting semantics from Unity layers and triggers
+- exact sorting semantics from Unity layers, sorting orders, and trigger conventions
+- polygon collider fidelity and rigidbody behavior
 
 ## Unsupported in v1
 
-- Unity scripts and gameplay components
+- Unity scripts as live runtime behavior
 - Unity materials and shaders
 - URP patch packages
-- direct `.unitypackage` import without extracted textures
-
+- full Unity demo-scene parity
