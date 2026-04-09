@@ -1,0 +1,18 @@
+; Engine configuration file.
+; Minimal Godot 4.6 project for the Cainos Basic importer addon.
+
+config_version=5
+
+[application]
+
+config/name="Cainos Basic Importer"
+run/main_scene="res://scenes/workspace.tscn"
+config/features=PackedStringArray("4.6")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/cainos_basic_importer/plugin.cfg")
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
