@@ -39,6 +39,10 @@ The smoke validator checks these real generated assets:
 - `PF Plant - Bush 01`
 - `PF Props - Stone Lantern 01`
 - `PF Struct - Stairs S 01 L`
+- `PF Struct - Stairs E 01`
+- `PF Struct - Stairs E 02`
+- `PF Struct - Stairs W 01`
+- `PF Struct - Stairs W 02`
 - `PF Props - Altar 01`
 - `PF Props - Rune Pillar X2`
 - `PF Player`
@@ -46,7 +50,7 @@ The smoke validator checks these real generated assets:
 Expected structure:
 - Bush keeps a `Shadow` child
 - Stone Lantern keeps a rectangle-style collision shape
-- Stairs preserve normalized `cainos_behavior_hints` and deferred MonoBehaviour metadata
+- South/east/west stairs preserve normalized `cainos_behavior_hints` and deferred MonoBehaviour metadata
 - Altar preserves normalized trigger metadata with rune-node mappings
 - Rune Pillar preserves normalized glow-animation metadata
 - Player includes visible sprite content
@@ -54,7 +58,10 @@ Expected structure:
 Expected report detail:
 - `compatibility_report.md` includes prefab-level entries for the anchor prefabs
 - `PF Struct - Stairs S 01 L` is listed under the manual-behavior tier
-- `PF Props - Well 01` is listed under the approximated tier
+- `PF Struct - Stairs E 01`, `PF Struct - Stairs E 02`, `PF Struct - Stairs W 01`, and `PF Struct - Stairs W 02` are also listed under the manual-behavior tier
+- `PF Props - Well 01` is listed under the supported-static tier with `polygon_collider_imported`
+- `PF Props - Barrel 01` remains in the approximated tier because `rigidbody_deferred` is still out of scope
+- the unresolved tier is empty
 - `TP Grass`, `TP Stone Ground`, and `TP Wall` are listed under the editor-only Unity assets section instead of the semantic prefab tiers
 - `asset_catalog.md` lists named prefab scene paths for Bush, Stone Lantern, Stairs, Altar, Rune Pillar, and Player
 

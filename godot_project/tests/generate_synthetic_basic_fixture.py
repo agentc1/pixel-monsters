@@ -36,7 +36,9 @@ GUIDS = {
     "prefab_stairs": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "prefab_altar": "ababcdcdababcdcdababcdcdababcdcd",
     "prefab_rune": "cdcdababcdcdababcdcdababcdcdabab",
-    "prefab_polygon": "ffffffffffffffffffffffffffffffff",
+    "prefab_polygon_static": "ffffffffffffffffffffffffffffffff",
+    "prefab_polygon_body": "12121212121212121212121212121212",
+    "prefab_polygon_invalid": "34343434343434343434343434343434",
     "prefab_broken": "12341234123412341234123412341234",
     "prefab_player": "56785678567856785678567856785678",
     "prefab_tile_palette": "99990000111122223333444455556666",
@@ -48,7 +50,7 @@ SPRITES = {
     "lantern": {"name": "TX Stone Lantern", "file_id": "6100000000000000003", "rect": (0, 0, 20, 28), "pivot": (0.5, 0.5)},
     "shadow_lantern": {"name": "TX Shadow Lantern", "file_id": "6100000000000000004", "rect": (0, 0, 22, 10), "pivot": (0.5, 0.5)},
     "stairs": {"name": "TX Struct Stairs L", "file_id": "6100000000000000005", "rect": (0, 0, 32, 32), "pivot": (0.5, 0.5)},
-    "edge": {"name": "TX Struct Edge", "file_id": "6100000000000000006", "rect": (32, 0, 32, 16), "pivot": (0.5, 0.5)},
+    "edge": {"name": "TX Struct Edge", "file_id": "-6100000000000000006", "rect": (32, 0, 32, 16), "pivot": (0.5, 0.5)},
     "player": {"name": "TX Player Idle", "file_id": "6100000000000000007", "rect": (0, 0, 24, 32), "pivot": (0.5, 0.0)},
     "polygon_prop": {"name": "TX Props Polygon", "file_id": "6100000000000000008", "rect": (32, 0, 24, 24), "pivot": (0.5, 0.5)},
     "altar": {"name": "TX Props Altar", "file_id": "6100000000000000009", "rect": (64, 0, 32, 32), "pivot": (0.5, 0.5)},
@@ -83,9 +85,9 @@ def main() -> None:
         "extracted_a": str(extracted_a),
         "extracted_b": str(extracted_b),
         "expected": {
-            "prefab_count": 10,
-            "supported_static_prefabs": 3,
-            "approximated_prefabs": 2,
+            "prefab_count": 12,
+            "supported_static_prefabs": 4,
+            "approximated_prefabs": 3,
             "manual_behavior_prefabs": 4,
             "unresolved_or_skipped_prefabs": 1,
             "editor_only_prefabs": 1,
@@ -98,7 +100,9 @@ def main() -> None:
                 "player": "PF Player",
                 "edge": "PF Struct - Z Edge 01",
                 "complex_edge": "PF Struct - Z Edge Complex 01",
-                "polygon": "PF Props - Z Polygon 01",
+                "polygon_static": "PF Props - Z Polygon Static 01",
+                "polygon_body": "PF Props - Z Polygon Body 01",
+                "polygon_invalid": "PF Props - Z Polygon Invalid 01",
                 "broken": "PF Props - Z Broken 01",
                 "editor_only": "TP Grass",
             },
@@ -259,7 +263,9 @@ def build_asset_map():
     add_prefab(assets, GUIDS["prefab_stairs"], f"{PREFAB_ROOT}/Struct/PF Struct - Stairs S 01 L.prefab", stairs_prefab())
     add_prefab(assets, GUIDS["prefab_altar"], f"{PREFAB_ROOT}/Props/PF Props - Altar 01.prefab", altar_prefab())
     add_prefab(assets, GUIDS["prefab_rune"], f"{PREFAB_ROOT}/Props/PF Props - Rune Pillar X2.prefab", rune_pillar_prefab())
-    add_prefab(assets, GUIDS["prefab_polygon"], f"{PREFAB_ROOT}/Props/PF Props - Z Polygon 01.prefab", polygon_prefab())
+    add_prefab(assets, GUIDS["prefab_polygon_static"], f"{PREFAB_ROOT}/Props/PF Props - Z Polygon Static 01.prefab", polygon_static_prefab())
+    add_prefab(assets, GUIDS["prefab_polygon_body"], f"{PREFAB_ROOT}/Props/PF Props - Z Polygon Body 01.prefab", polygon_body_prefab())
+    add_prefab(assets, GUIDS["prefab_polygon_invalid"], f"{PREFAB_ROOT}/Props/PF Props - Z Polygon Invalid 01.prefab", polygon_invalid_prefab())
     add_prefab(assets, GUIDS["prefab_broken"], f"{PREFAB_ROOT}/Props/PF Props - Z Broken 01.prefab", broken_prefab())
     add_prefab(assets, GUIDS["prefab_player"], f"{PREFAB_ROOT}/Player/PF Player.prefab", player_prefab())
     add_prefab(assets, GUIDS["prefab_tile_palette"], f"{PACK_ROOT}/Tile Palette/TP Grass.prefab", tile_palette_prefab())
@@ -463,13 +469,36 @@ def rune_pillar_prefab():
     ) + "\n"
 
 
-def polygon_prefab():
+def polygon_static_prefab():
     return "\n".join(
         [
-            game_object_doc("500100", "PF Props - Z Polygon 01", ["500101", "500102", "500103"]),
+            game_object_doc("500100", "PF Props - Z Polygon Static 01", ["500101", "500102", "500103"]),
             transform_doc("500101", "500100", "0", [], (0.0, 0.0, 0.0)),
             sprite_renderer_doc("500102", "500100", GUIDS["props"], SPRITES["polygon_prop"]["file_id"], sorting_order=0),
-            polygon_collider_doc("500103", "500100"),
+            polygon_collider_doc("500103", "500100", [[(-0.5, -0.5), (0.5, -0.5), (0.6, 0.4), (-0.4, 0.6)]]),
+        ]
+    ) + "\n"
+
+
+def polygon_body_prefab():
+    return "\n".join(
+        [
+            game_object_doc("510100", "PF Props - Z Polygon Body 01", ["510101", "510102", "510103", "510104"]),
+            transform_doc("510101", "510100", "0", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("510102", "510100", GUIDS["props"], SPRITES["polygon_prop"]["file_id"], sorting_order=0),
+            polygon_collider_doc("510103", "510100", [[(-0.45, -0.45), (0.45, -0.45), (0.45, 0.45), (-0.45, 0.45)]]),
+            rigidbody2d_doc("510104", "510100"),
+        ]
+    ) + "\n"
+
+
+def polygon_invalid_prefab():
+    return "\n".join(
+        [
+            game_object_doc("520100", "PF Props - Z Polygon Invalid 01", ["520101", "520102", "520103"]),
+            transform_doc("520101", "520100", "0", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("520102", "520100", GUIDS["props"], SPRITES["polygon_prop"]["file_id"], sorting_order=0),
+            polygon_collider_doc("520103", "520100", [[(-0.5, 0.0), (0.5, 0.0)]]),
         ]
     ) + "\n"
 
@@ -648,19 +677,31 @@ def mono_behaviour_doc(object_id, game_object_id, script_guid, field_lines):
     return "\n".join(lines)
 
 
-def polygon_collider_doc(object_id, game_object_id):
-    return "\n".join(
-        [
-            f"--- !u!60 &{object_id}",
-            "PolygonCollider2D:",
-            "  m_ObjectHideFlags: 0",
-            "  m_CorrespondingSourceObject: {fileID: 0}",
-            "  m_PrefabInstance: {fileID: 0}",
-            "  m_PrefabAsset: {fileID: 0}",
-            f"  m_GameObject: {{fileID: {game_object_id}}}",
-            "  m_Enabled: 1",
-        ]
-    )
+def polygon_collider_doc(object_id, game_object_id, paths, offset=(0.0, 0.0), is_trigger=False):
+    ox, oy = offset
+    lines = [
+        f"--- !u!60 &{object_id}",
+        "PolygonCollider2D:",
+        "  m_ObjectHideFlags: 0",
+        "  m_CorrespondingSourceObject: {fileID: 0}",
+        "  m_PrefabInstance: {fileID: 0}",
+        "  m_PrefabAsset: {fileID: 0}",
+        f"  m_GameObject: {{fileID: {game_object_id}}}",
+        "  m_Enabled: 1",
+        f"  m_IsTrigger: {1 if is_trigger else 0}",
+        f"  m_Offset: {{x: {ox}, y: {oy}}}",
+        "  m_Points:",
+        "    m_Paths:",
+    ]
+    for path in paths:
+        if not path:
+            continue
+        first = True
+        for px, py in path:
+            prefix = "    - - " if first else "      - "
+            lines.append(f"{prefix}{{x: {px}, y: {py}}}")
+            first = False
+    return "\n".join(lines)
 
 
 def rigidbody2d_doc(object_id, game_object_id):

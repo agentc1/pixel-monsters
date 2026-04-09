@@ -75,6 +75,7 @@ Beginner-friendly manual checks are documented here:
 - `godot_project/docs/manual-tests/03_sample_prefab_inspection.md`
 - `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
 - `godot_project/docs/manual-tests/05_deferred_behavior_metadata.md`
+- `godot_project/docs/manual-tests/06_polygon_collision_fidelity.md`
 
 Testing tracks:
 - synthetic track: run `./godot_project/tests/run_basic_regressions.sh` with no licensed content

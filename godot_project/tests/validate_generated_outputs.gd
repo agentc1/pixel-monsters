@@ -36,7 +36,9 @@ func _init() -> void:
 	_validate_altar_prefab(output_root, str(sample_prefabs.get("altar", "")))
 	_validate_rune_prefab(output_root, str(sample_prefabs.get("rune", "")))
 	_validate_edge_prefab(output_root, str(sample_prefabs.get("edge", "")), expected)
-	_validate_polygon_prefab(output_root, str(sample_prefabs.get("polygon", "")))
+	_validate_polygon_prefab(output_root, str(sample_prefabs.get("polygon_static", "")), true)
+	_validate_polygon_prefab(output_root, str(sample_prefabs.get("polygon_body", "")), true)
+	_validate_polygon_prefab(output_root, str(sample_prefabs.get("polygon_invalid", "")), false)
 	_validate_player_prefab(output_root, str(sample_prefabs.get("player", "")))
 	_validate_broken_prefab_absent(output_root, str(sample_prefabs.get("broken", "")))
 	_validate_editor_only_prefab_absent(output_root, str(sample_prefabs.get("editor_only", "")))
@@ -195,14 +197,15 @@ func _validate_edge_prefab(output_root: String, prefab_name: String, expected: D
 	root.free()
 
 
-func _validate_polygon_prefab(output_root: String, prefab_name: String) -> void:
+func _validate_polygon_prefab(output_root: String, prefab_name: String, expect_polygon: bool) -> void:
 	var root := _instantiate_prefab(output_root, "props", prefab_name)
 	if root == null:
 		return
-	_assert_true(root.has_meta("unsupported_components"), "Polygon prefab preserves unsupported_components metadata")
-	if root.has_meta("unsupported_components"):
-		var unsupported: Variant = root.get_meta("unsupported_components")
-		_assert_true(unsupported is Array and unsupported.has("PolygonCollider2D"), "Polygon prefab metadata flags PolygonCollider2D")
+	var polygon_count := _count_collision_polygons(root)
+	if expect_polygon:
+		_assert_true(polygon_count > 0, "Polygon prefab imports CollisionPolygon2D: %s" % prefab_name)
+	else:
+		_assert_eq(polygon_count, 0, "Invalid polygon prefab defers CollisionPolygon2D: %s" % prefab_name)
 	root.free()
 
 
@@ -243,6 +246,15 @@ func _first_collision_shape(node: Node) -> CollisionShape2D:
 		if child is CollisionShape2D:
 			return child
 	return null
+
+
+func _count_collision_polygons(node: Node) -> int:
+	var count := 0
+	if node is CollisionPolygon2D:
+		count += 1
+	for child in node.get_children():
+		count += _count_collision_polygons(child)
+	return count
 
 
 func _find_first_sprite(node: Node) -> Sprite2D:

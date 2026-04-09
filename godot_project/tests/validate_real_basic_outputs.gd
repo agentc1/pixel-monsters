@@ -12,7 +12,9 @@ func _init() -> void:
 	_validate_report_files(output_root)
 	_validate_bush_prefab(output_root)
 	_validate_lantern_prefab(output_root)
+	_validate_polygon_prefabs(output_root)
 	_validate_stairs_prefab(output_root)
+	_validate_east_west_stairs_prefabs(output_root)
 	_validate_altar_prefab(output_root)
 	_validate_rune_prefab(output_root)
 	_validate_player_prefab(output_root)
@@ -72,6 +74,33 @@ func _validate_lantern_prefab(output_root: String) -> void:
 	root.free()
 
 
+func _validate_polygon_prefabs(output_root: String) -> void:
+	for prefab_name in [
+		"PF Props - Statue 01",
+		"PF Props - Stone 06",
+		"PF Props - Stone 07",
+		"PF Props - Well 01",
+		"PF Props - Wooden Gate 01 Opened",
+	]:
+		_validate_polygon_prefab_collision(output_root, "props", prefab_name)
+	_validate_polygon_prefab_collision(output_root, "struct", "PF Struct - Gate 02")
+	for prefab_name in [
+		"PF Props - Barrel 01",
+		"PF Props - Pot 01",
+		"PF Props - Pot 02",
+		"PF Props - Pot 03",
+	]:
+		_validate_polygon_prefab_collision(output_root, "props", prefab_name)
+
+
+func _validate_polygon_prefab_collision(output_root: String, family: String, prefab_name: String) -> void:
+	var root := _instantiate_prefab(output_root, family, prefab_name)
+	if root == null:
+		return
+	_assert_true(_count_collision_polygons(root) > 0, "%s imports CollisionPolygon2D" % prefab_name)
+	root.free()
+
+
 func _validate_stairs_prefab(output_root: String) -> void:
 	var root := _instantiate_prefab(output_root, "struct", "PF Struct - Stairs S 01 L")
 	if root == null:
@@ -83,6 +112,27 @@ func _validate_stairs_prefab(output_root: String) -> void:
 		_assert_true(behaviour_node.has_meta("unity_mono_behaviours"), "Stairs prefab preserves deferred MonoBehaviour metadata")
 		_assert_true(not _behavior_hints_for(behaviour_node, "stairs_layer_trigger").is_empty(), "Stairs trigger node keeps local behavior hint")
 	root.free()
+
+
+func _validate_east_west_stairs_prefabs(output_root: String) -> void:
+	for prefab_name in [
+		"PF Struct - Stairs E 01",
+		"PF Struct - Stairs E 02",
+		"PF Struct - Stairs W 01",
+		"PF Struct - Stairs W 02",
+	]:
+		var root := _instantiate_prefab(output_root, "struct", prefab_name)
+		if root == null:
+			continue
+		_assert_true(not _behavior_hints_for(root, "stairs_layer_trigger").is_empty(), "%s exposes stairs_layer_trigger behavior hint" % prefab_name)
+		var behaviour_node: Node = root.find_child("Stairs Layer Trigger", true, false)
+		_assert_true(behaviour_node != null, "%s keeps trigger helper node" % prefab_name)
+		if behaviour_node != null:
+			_assert_true(behaviour_node.has_meta("unity_mono_behaviours"), "%s preserves deferred MonoBehaviour metadata" % prefab_name)
+			_assert_true(not _behavior_hints_for(behaviour_node, "stairs_layer_trigger").is_empty(), "%s trigger node keeps local behavior hint" % prefab_name)
+		_assert_true(_find_first_sprite(root) != null, "%s includes visible sprite content" % prefab_name)
+		_assert_true(_count_collision_shapes(root) + _count_collision_polygons(root) > 0, "%s keeps imported collision nodes" % prefab_name)
+		root.free()
 
 
 func _validate_altar_prefab(output_root: String) -> void:
@@ -122,24 +172,65 @@ func _validate_report_files(output_root: String) -> void:
 	var compatibility_report = _load_json_file(output_root.path_join("reports/compatibility_report.json"))
 	_assert_true(compatibility_report is Dictionary, "Compatibility report JSON loads")
 	if compatibility_report is Dictionary:
-		_assert_eq(int(compatibility_report.get("format_version", -1)), 3, "Compatibility report format_version")
+		_assert_eq(int(compatibility_report.get("format_version", -1)), 4, "Compatibility report format_version")
 		var summary: Dictionary = compatibility_report.get("summary", {})
-		_assert_eq(int(summary.get("supported_static_prefabs", -1)), 51, "Compatibility report supported count")
-		_assert_eq(int(summary.get("approximated_prefabs", -1)), 13, "Compatibility report approximated count")
-		_assert_eq(int(summary.get("manual_behavior_prefabs", -1)), 10, "Compatibility report manual count")
-		_assert_eq(int(summary.get("unresolved_or_skipped_prefabs", -1)), 4, "Compatibility report unresolved count")
+		_assert_eq(int(summary.get("supported_static_prefabs", -1)), 57, "Compatibility report supported count")
+		_assert_eq(int(summary.get("approximated_prefabs", -1)), 7, "Compatibility report approximated count")
+		_assert_eq(int(summary.get("manual_behavior_prefabs", -1)), 14, "Compatibility report manual count")
+		_assert_eq(int(summary.get("unresolved_or_skipped_prefabs", -1)), 0, "Compatibility report unresolved count")
 		_assert_eq(int(summary.get("editor_only_prefabs", -1)), 3, "Compatibility report editor-only count")
 		var stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Struct - Stairs S 01 L")
 		_assert_true(not stairs_entry.is_empty(), "Compatibility report includes stairs entry")
 		_assert_eq(str(stairs_entry.get("tier", "")), "manual_behavior", "Compatibility report stairs tier")
 		_assert_true(Array(stairs_entry.get("reasons", [])).has("stairs_layer_trigger_hint"), "Compatibility report stairs reason")
-		var well_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Props - Well 01")
-		_assert_true(not well_entry.is_empty(), "Compatibility report includes approximated real-pack sample")
-		_assert_eq(str(well_entry.get("tier", "")), "approximated", "Compatibility report well tier")
-		_assert_true(Array(well_entry.get("reasons", [])).has("polygon_collider_deferred"), "Compatibility report well reason")
-		var east_stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Struct - Stairs E 01")
-		_assert_true(not east_stairs_entry.is_empty(), "Compatibility report includes unresolved east stairs entry")
-		_assert_true(Array(east_stairs_entry.get("behavior_hints", [])).size() > 0, "Unresolved stairs still preserve behavior hints in report data")
+		for prefab_name in [
+			"PF Struct - Stairs E 01",
+			"PF Struct - Stairs E 02",
+			"PF Struct - Stairs W 01",
+			"PF Struct - Stairs W 02",
+		]:
+			var ew_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), prefab_name)
+			_assert_true(not ew_entry.is_empty(), "Compatibility report includes east/west stairs entry: %s" % prefab_name)
+			_assert_eq(str(ew_entry.get("tier", "")), "manual_behavior", "Compatibility report east/west stairs tier: %s" % prefab_name)
+			var ew_reasons := Array(ew_entry.get("reasons", []))
+			_assert_true(ew_reasons.has("stairs_layer_trigger_hint"), "Compatibility report east/west stairs reason: %s" % prefab_name)
+			_assert_true(not ew_reasons.has("unresolved_sprite_reference"), "Compatibility report omits unresolved sprite reason for repaired stairs: %s" % prefab_name)
+			_assert_true(ew_entry.get("scene_path", null) != null, "Compatibility report records scene path for repaired stairs: %s" % prefab_name)
+		for prefab_name in [
+			"PF Props - Statue 01",
+			"PF Props - Stone 06",
+			"PF Props - Stone 07",
+			"PF Props - Well 01",
+			"PF Props - Wooden Gate 01 Opened",
+			"PF Struct - Gate 02",
+		]:
+			var entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), prefab_name)
+			_assert_true(not entry.is_empty(), "Compatibility report includes supported polygon sample: %s" % prefab_name)
+			_assert_eq(str(entry.get("tier", "")), "supported_static", "Compatibility report supported polygon tier: %s" % prefab_name)
+			_assert_true(Array(entry.get("reasons", [])).has("polygon_collider_imported"), "Compatibility report polygon import reason: %s" % prefab_name)
+		for prefab_name in [
+			"PF Props - Barrel 01",
+			"PF Props - Pot 01",
+			"PF Props - Pot 02",
+			"PF Props - Pot 03",
+		]:
+			var entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), prefab_name)
+			_assert_true(not entry.is_empty(), "Compatibility report includes polygon+rigidbody sample: %s" % prefab_name)
+			_assert_eq(str(entry.get("tier", "")), "approximated", "Compatibility report polygon+rigidbody tier: %s" % prefab_name)
+			_assert_true(Array(entry.get("reasons", [])).has("polygon_collider_imported"), "Compatibility report polygon+rigidbody import reason: %s" % prefab_name)
+			_assert_true(Array(entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report polygon+rigidbody rigidbody reason: %s" % prefab_name)
+		for prefab_name in [
+			"PF Props - Crate 01",
+			"PF Props - Crate 02",
+			"PF Props - Stone Cube 01",
+		]:
+			var entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), prefab_name)
+			_assert_true(not entry.is_empty(), "Compatibility report includes rigidbody-only approximation sample: %s" % prefab_name)
+			_assert_eq(str(entry.get("tier", "")), "approximated", "Compatibility report rigidbody-only tier: %s" % prefab_name)
+			_assert_true(Array(entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report rigidbody-only reason: %s" % prefab_name)
+			_assert_true(not Array(entry.get("reasons", [])).has("polygon_collider_imported"), "Compatibility report omits polygon import reason for rigidbody-only sample: %s" % prefab_name)
+		var unresolved_entries: Array = compatibility_report.get("tiers", {}).get("unresolved_or_skipped", [])
+		_assert_eq(unresolved_entries.size(), 0, "Compatibility report unresolved tier is empty")
 		var editor_only_prefabs: Array = compatibility_report.get("editor_only_prefabs", [])
 		_assert_true(not _find_catalog_prefab_entry(editor_only_prefabs, "TP Grass").is_empty(), "Compatibility report includes TP Grass as editor-only")
 		_assert_true(_find_tier_prefab_entry(compatibility_report.get("tiers", {}), "TP Grass").is_empty(), "Editor-only tile palette is excluded from semantic tiers")
@@ -147,10 +238,16 @@ func _validate_report_files(output_root: String) -> void:
 	var asset_catalog = _load_json_file(output_root.path_join("reports/asset_catalog.json"))
 	_assert_true(asset_catalog is Dictionary, "Asset catalog JSON loads")
 	if asset_catalog is Dictionary:
-		_assert_eq(int(asset_catalog.get("format_version", -1)), 3, "Asset catalog format_version")
+		_assert_eq(int(asset_catalog.get("format_version", -1)), 4, "Asset catalog format_version")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Plant - Bush 01").is_empty(), "Asset catalog includes Bush prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Stone Lantern 01").is_empty(), "Asset catalog includes Stone Lantern prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Well 01").is_empty(), "Asset catalog includes Well prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Gate 02").is_empty(), "Asset catalog includes Gate 02 prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs S 01 L").is_empty(), "Asset catalog includes Stairs prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs E 01").is_empty(), "Asset catalog includes Stairs E 01 prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs E 02").is_empty(), "Asset catalog includes Stairs E 02 prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs W 01").is_empty(), "Asset catalog includes Stairs W 01 prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs W 02").is_empty(), "Asset catalog includes Stairs W 02 prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Altar 01").is_empty(), "Asset catalog includes Altar prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Rune Pillar X2").is_empty(), "Asset catalog includes Rune Pillar prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Player").is_empty(), "Asset catalog includes Player prefab")
@@ -173,6 +270,24 @@ func _first_collision_shape(node: Node) -> CollisionShape2D:
 		if child is CollisionShape2D:
 			return child
 	return null
+
+
+func _count_collision_shapes(node: Node) -> int:
+	var count := 0
+	if node is CollisionShape2D:
+		count += 1
+	for child in node.get_children():
+		count += _count_collision_shapes(child)
+	return count
+
+
+func _count_collision_polygons(node: Node) -> int:
+	var count := 0
+	if node is CollisionPolygon2D:
+		count += 1
+	for child in node.get_children():
+		count += _count_collision_polygons(child)
+	return count
 
 
 func _find_first_sprite(node: Node) -> Sprite2D:

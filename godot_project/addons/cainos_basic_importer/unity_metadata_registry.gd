@@ -194,7 +194,7 @@ func _parse_texture_meta(asset_path: String, guid: String, meta_text: String) ->
 
 func _parse_sprite_block(block_text: String, texture_guid: String, asset_path: String, pixels_per_unit: float) -> Dictionary:
 	var name = _regex_capture(block_text, "(?m)^\\s+name: (.+)$")
-	var internal_id = _regex_capture(block_text, "(?m)^\\s+internalID: (\\d+)$")
+	var internal_id = _regex_capture(block_text, "(?m)^\\s+internalID: ([\\-0-9]+)$")
 	var rect_match = _regex_search(block_text, "(?ms)\\s+rect:\\n(?:\\s+serializedVersion: \\d+\\n)?\\s+x: ([^\\n]+)\\n\\s+y: ([^\\n]+)\\n\\s+width: ([^\\n]+)\\n\\s+height: ([^\\n]+)")
 	if name.is_empty() or internal_id.is_empty() or rect_match.is_empty():
 		return {}
@@ -235,6 +235,7 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 	var sprite_renderers := {}
 	var box_colliders := {}
 	var edge_colliders := {}
+	var polygon_colliders := {}
 	var mono_behaviours := {}
 	var unsupported_components := []
 
@@ -286,6 +287,14 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 					"offset": _extract_vector2(body, "m_Offset"),
 					"points": _extract_point_list(body),
 				}
+			"PolygonCollider2D":
+				polygon_colliders[object_id] = {
+					"id": object_id,
+					"game_object_id": _extract_ref_file_id(body, "m_GameObject"),
+					"is_trigger": _extract_bool(body, "m_IsTrigger"),
+					"offset": _extract_vector2(body, "m_Offset"),
+					"paths": _extract_polygon_paths(body),
+				}
 			"MonoBehaviour":
 				mono_behaviours[object_id] = {
 					"id": object_id,
@@ -295,7 +304,7 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 					"fields": _extract_mono_fields(body),
 					"raw_body": body,
 				}
-			"PolygonCollider2D", "Rigidbody2D", "Animator":
+			"Rigidbody2D", "Animator":
 				if not unsupported_components.has(document_class_name):
 					unsupported_components.append(document_class_name)
 
@@ -324,6 +333,7 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 			"sprite_renderers": [],
 			"box_colliders": [],
 			"edge_colliders": [],
+			"polygon_colliders": [],
 			"mono_behaviours": [],
 			"children": [],
 		}
@@ -360,6 +370,30 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 			colliders.append(collider)
 			nodes[game_object_id]["edge_colliders"] = colliders
 
+	for collider_id_variant in polygon_colliders.keys():
+		var collider_id := str(collider_id_variant)
+		var collider: Dictionary = polygon_colliders[collider_id]
+		var paths: Array = collider.get("paths", [])
+		var accepted_paths := []
+		var deferred_paths := []
+		if paths.is_empty():
+			deferred_paths.append([])
+		else:
+			for path_variant in paths:
+				var path: Array = path_variant
+				if path.size() >= 3:
+					accepted_paths.append(path)
+				else:
+					deferred_paths.append(path)
+		collider["accepted_paths"] = accepted_paths
+		collider["deferred_paths"] = deferred_paths
+		polygon_colliders[collider_id] = collider
+		var game_object_id := str(collider.get("game_object_id", "0"))
+		if nodes.has(game_object_id):
+			var colliders: Array = nodes[game_object_id].get("polygon_colliders", [])
+			colliders.append(collider)
+			nodes[game_object_id]["polygon_colliders"] = colliders
+
 	for mono_variant in mono_behaviours.values():
 		var mono: Dictionary = mono_variant
 		var game_object_id := str(mono.get("game_object_id", "0"))
@@ -372,8 +406,10 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 	var unresolved_sprite_refs := []
 	var simple_edge_collider_count := 0
 	var complex_edge_collider_count := 0
+	var polygon_collider_count := polygon_colliders.size()
+	var polygon_paths_imported := 0
+	var polygon_paths_deferred := 0
 	var has_mono := not mono_behaviours.is_empty()
-	var has_polygon := unsupported_components.has("PolygonCollider2D")
 	var has_rigidbody := unsupported_components.has("Rigidbody2D")
 	var has_animator := unsupported_components.has("Animator")
 	var has_box_collider := not box_colliders.is_empty()
@@ -396,6 +432,11 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 			simple_edge_collider_count += 1
 		else:
 			complex_edge_collider_count += 1
+
+	for collider_variant in polygon_colliders.values():
+		var collider: Dictionary = collider_variant
+		polygon_paths_imported += Array(collider.get("accepted_paths", [])).size()
+		polygon_paths_deferred += Array(collider.get("deferred_paths", [])).size()
 
 	root_ids.sort()
 	var scene_node_paths := _scene_node_paths_for_prefab(root_ids, nodes)
@@ -426,11 +467,12 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 
 	var support_tier := "supported_static"
 	var has_complex_edge := complex_edge_collider_count > 0
+	var has_deferred_polygon := polygon_paths_deferred > 0
 	if not unresolved_sprite_refs.is_empty():
 		support_tier = "unresolved_or_skipped"
 	elif has_mono or has_animator:
 		support_tier = "manual_behavior"
-	elif has_polygon or has_rigidbody or has_complex_edge:
+	elif has_deferred_polygon or has_rigidbody or has_complex_edge:
 		support_tier = "approximated"
 
 	var display_name := asset_path.get_file().trim_suffix(".prefab")
@@ -440,11 +482,12 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 		has_box_collider,
 		simple_edge_collider_count,
 		complex_edge_collider_count,
+		polygon_paths_imported,
+		polygon_paths_deferred,
 		unresolved_sprite_refs,
 		behavior_kinds,
 		has_mono,
 		has_animator,
-		has_polygon,
 		has_rigidbody
 	)
 	var report_details := _prefab_report_details(
@@ -453,6 +496,9 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 		box_colliders.size(),
 		simple_edge_collider_count,
 		complex_edge_collider_count,
+		polygon_collider_count,
+		polygon_paths_imported,
+		polygon_paths_deferred,
 		behavior_kinds
 	)
 	return {
@@ -803,6 +849,37 @@ func _extract_point_list(body: String) -> Array:
 	return points
 
 
+func _extract_polygon_paths(body: String) -> Array:
+	var paths := []
+	var lines := body.split("\n")
+	var in_paths := false
+	var current_path := []
+	for raw_line_variant in lines:
+		var raw_line := str(raw_line_variant)
+		if raw_line.begins_with("    m_Paths:"):
+			in_paths = true
+			continue
+		if not in_paths:
+			continue
+		if raw_line.begins_with("  ") and not raw_line.begins_with("    "):
+			break
+		var line := raw_line.strip_edges()
+		if line.begins_with("- - {x: "):
+			if not current_path.is_empty():
+				paths.append(current_path)
+			current_path = []
+			var first_match := _regex_search(line, "\\{x: ([^,]+), y: ([^\\}]+)\\}")
+			if first_match.size() >= 2:
+				current_path.append(Vector2(float(first_match[0]), float(first_match[1])))
+		elif line.begins_with("- {x: "):
+			var point_match := _regex_search(line, "\\{x: ([^,]+), y: ([^\\}]+)\\}")
+			if point_match.size() >= 2:
+				current_path.append(Vector2(float(point_match[0]), float(point_match[1])))
+	if not current_path.is_empty():
+		paths.append(current_path)
+	return paths
+
+
 func _extract_string(body: String, key: String) -> String:
 	return _regex_capture(body, "(?m)^\\s*%s: (.+)$" % key)
 
@@ -879,11 +956,12 @@ func _prefab_reason_tokens(
 	has_box_collider: bool,
 	simple_edge_collider_count: int,
 	complex_edge_collider_count: int,
+	polygon_paths_imported: int,
+	polygon_paths_deferred: int,
 	unresolved_sprite_refs: Array,
 	behavior_kinds: Array,
 	has_mono: bool,
 	has_animator: bool,
-	has_polygon: bool,
 	has_rigidbody: bool
 ) -> Array:
 	var reasons := []
@@ -893,6 +971,11 @@ func _prefab_reason_tokens(
 		reasons.append("edge_collider_imported")
 	if complex_edge_collider_count > 0:
 		reasons.append("edge_collider_deferred_complex")
+	if polygon_paths_imported > 0:
+		reasons.append("polygon_collider_imported")
+	if polygon_paths_deferred > 0:
+		reasons.append("polygon_collider_deferred")
+		reasons.append("polygon_collider_deferred_complex")
 	if not unresolved_sprite_refs.is_empty():
 		reasons.append("unresolved_sprite_reference")
 	if has_mono:
@@ -909,8 +992,6 @@ func _prefab_reason_tokens(
 				reasons.append("top_down_character_controller_hint")
 	if has_animator:
 		reasons.append("animator_present")
-	if has_polygon:
-		reasons.append("polygon_collider_deferred")
 	if has_rigidbody:
 		reasons.append("rigidbody_deferred")
 	return reasons
@@ -922,6 +1003,9 @@ func _prefab_report_details(
 	box_collider_count: int,
 	simple_edge_collider_count: int,
 	complex_edge_collider_count: int,
+	polygon_collider_count: int,
+	polygon_paths_imported: int,
+	polygon_paths_deferred: int,
 	behavior_kinds: Array
 ) -> Dictionary:
 	var details := {}
@@ -937,6 +1021,12 @@ func _prefab_report_details(
 		details["simple_edge_collider_count"] = simple_edge_collider_count
 	if complex_edge_collider_count > 0:
 		details["complex_edge_collider_count"] = complex_edge_collider_count
+	if polygon_collider_count > 0:
+		details["polygon_collider_count"] = polygon_collider_count
+	if polygon_paths_imported > 0:
+		details["polygon_paths_imported"] = polygon_paths_imported
+	if polygon_paths_deferred > 0:
+		details["polygon_paths_deferred"] = polygon_paths_deferred
 	return details
 
 
@@ -955,8 +1045,10 @@ func _prefab_next_step(support_tier: String, reason_tokens: Array, behavior_kind
 		"supported_static":
 			return "Place the generated scene directly in Godot and add gameplay logic only if your project needs it."
 		"approximated":
-			if reason_tokens.has("edge_collider_deferred_complex") or reason_tokens.has("polygon_collider_deferred") or reason_tokens.has("rigidbody_deferred"):
+			if reason_tokens.has("polygon_collider_deferred") or reason_tokens.has("edge_collider_deferred_complex"):
 				return "Use the generated scene as a visual base, then rebuild or refine collision/physics behavior manually in Godot."
+			if reason_tokens.has("rigidbody_deferred"):
+				return "Use the generated scene as a visual and collision base, then rebuild rigidbody-driven physics behavior manually in Godot."
 			return "Use the generated scene as a visual base and inspect the preserved metadata before relying on runtime behavior."
 		"manual_behavior":
 			return "Use the generated scene as a visual base and rebuild the deferred Unity behavior in Godot using the preserved metadata."

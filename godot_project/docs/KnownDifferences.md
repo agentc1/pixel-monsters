@@ -7,7 +7,7 @@ This importer is authoring-first. It does not attempt full Unity parity in v1.
 - atlas textures copied into the project
 - paintable `TileSet` resources
 - named prefab scenes for the supported static Basic prefabs
-- simple `BoxCollider2D` and 2-point `EdgeCollider2D` mappings where they are straightforward
+- `BoxCollider2D`, 2-point `EdgeCollider2D`, and supported `PolygonCollider2D` mappings where they are straightforward
 - helper scenes for preview and prefab browsing
 
 ## Approximated
@@ -21,7 +21,7 @@ This importer is authoring-first. It does not attempt full Unity parity in v1.
 - prefabs with MonoBehaviour-driven behavior such as stairs or trigger logic
 - rebuilding the Unity demo scenes
 - exact sorting semantics from Unity layers, sorting orders, and trigger conventions
-- polygon collider fidelity and rigidbody behavior
+- rigidbody behavior and any remaining unsupported collider cases
 
 ## Unsupported in v1
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Inspect four anchor prefabs and confirm the importer preserved the important structure for each one.
+Inspect anchor prefabs and confirm the importer preserved the important structure for each one.
 
 These checks assume you have already imported the Basic pack.
 
@@ -53,6 +53,27 @@ Expected result:
 - the prefab is visually imported
 - runtime behavior is not implemented here, but the deferred Unity behavior is recorded both as normalized `cainos_behavior_hints` and the legacy raw `unity_mono_behaviours` payload
 
+## 3b. East/West stairs prefabs
+
+Open each of these scenes:
+
+- `res://cainos_imports/basic/scenes/prefabs/struct/PF Struct - Stairs E 01.tscn`
+- `res://cainos_imports/basic/scenes/prefabs/struct/PF Struct - Stairs E 02.tscn`
+- `res://cainos_imports/basic/scenes/prefabs/struct/PF Struct - Stairs W 01.tscn`
+- `res://cainos_imports/basic/scenes/prefabs/struct/PF Struct - Stairs W 02.tscn`
+
+Check in the Scene dock:
+- the scene opens and contains visible stair art
+- a node named `Stairs Layer Trigger` exists
+
+Check in the Inspector:
+- on the root node, confirm `cainos_behavior_hints` exists in `Metadata`
+- on `Stairs Layer Trigger`, confirm both `cainos_behavior_hints` and `unity_mono_behaviours` exist
+
+Expected result:
+- the east/west stairs are now generated as scenes instead of remaining unresolved
+- they are still deferred-behavior prefabs, not runnable stairs logic
+
 ## 4. Player prefab
 
 Open:
@@ -71,6 +92,7 @@ Check in the 2D view:
 - Bush keeps a separate `Shadow` child
 - Stone Lantern keeps a rectangle collision child
 - Stairs preserve deferred Unity behavior metadata
+- East/west stairs now open as generated prefab scenes
 - Player scene opens and shows visible sprite art
 
 ## If it fails

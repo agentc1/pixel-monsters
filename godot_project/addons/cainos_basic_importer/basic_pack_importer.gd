@@ -5,8 +5,8 @@ const UnityMetadataRegistry := preload("res://addons/cainos_basic_importer/unity
 
 const PACK_ID := "basic"
 const IMPORTER_ID := "cainos_basic_importer"
-const IMPORTER_VERSION := "0.3.0"
-const REPORT_FORMAT_VERSION := 3
+const IMPORTER_VERSION := "0.4.0"
+const REPORT_FORMAT_VERSION := 4
 const DEFAULT_OUTPUT_ROOT := "res://cainos_imports/basic"
 const TILE_SIZE := Vector2i(32, 32)
 const DEFAULT_PPU := 32.0
@@ -559,7 +559,7 @@ func _build_compatibility(inventory: Dictionary, profile: Dictionary = {}, seman
 		compatibility.append({
 			"title": "Approximated prefab collisions",
 			"status": "approximated",
-			"detail": "%s prefabs import with partial collision/physics fidelity; polygon colliders and rigidbodies are deferred." % inventory.get("approximated_prefabs", 0),
+			"detail": "%s prefabs import with partial collision/physics fidelity; rigidbodies and any unsupported collider cases are still deferred." % inventory.get("approximated_prefabs", 0),
 			"next": "Use the generated scene as a visual base, then add or refine collisions manually where needed.",
 		})
 		compatibility.append({
@@ -1003,6 +1003,33 @@ func _apply_game_object_to_node(node: Node2D, node_desc: Dictionary, scene_root:
 		owner.add_child(shape_node)
 		node.add_child(owner)
 		collider_index += 1
+
+	for collider_variant in node_desc.get("polygon_colliders", []):
+		var collider: Dictionary = collider_variant
+		var accepted_paths: Array = collider.get("accepted_paths", [])
+		if accepted_paths.is_empty():
+			continue
+		var owner: Node2D = Area2D.new() if collider.get("is_trigger", false) else StaticBody2D.new()
+		owner.name = "PolygonCollider_%d" % collider_index
+		owner.position = _unity_vector2_to_godot_px(collider.get("offset", Vector2.ZERO), ppu)
+		var path_index := 0
+		for path_variant in accepted_paths:
+			var path: Array = path_variant
+			if path.size() < 3:
+				continue
+			var polygon := PackedVector2Array()
+			for point_variant in path:
+				polygon.append(_unity_vector2_to_godot_px(point_variant, ppu))
+			var polygon_node := CollisionPolygon2D.new()
+			polygon_node.name = "Polygon_%d" % path_index
+			polygon_node.polygon = polygon
+			owner.add_child(polygon_node)
+			path_index += 1
+		if owner.get_child_count() > 0:
+			node.add_child(owner)
+			collider_index += 1
+		else:
+			owner.free()
 
 	if not node_desc.get("mono_behaviours", []).is_empty():
 		node.set_meta("unity_mono_behaviours", node_desc.get("mono_behaviours", []))
@@ -1574,6 +1601,12 @@ func _prefab_detail_summary(details: Dictionary) -> String:
 		parts.append("behavior=%s" % ", ".join(details.get("behavior_kinds", [])))
 	if details.has("complex_edge_collider_count"):
 		parts.append("complex edge colliders=%s" % str(details.get("complex_edge_collider_count", 0)))
+	if details.has("polygon_collider_count"):
+		parts.append("polygon colliders=%s" % str(details.get("polygon_collider_count", 0)))
+	if details.has("polygon_paths_imported"):
+		parts.append("polygon paths imported=%s" % str(details.get("polygon_paths_imported", 0)))
+	if details.has("polygon_paths_deferred"):
+		parts.append("polygon paths deferred=%s" % str(details.get("polygon_paths_deferred", 0)))
 	if details.has("unsupported_components"):
 		parts.append("unsupported=%s" % ", ".join(details.get("unsupported_components", [])))
 	return "; ".join(parts)
