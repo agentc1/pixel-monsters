@@ -22,3 +22,16 @@ Current v1 shape:
 - helper assets: preview map, prefab catalog, compatibility report, and import manifest
 
 Use `godot_project/docs/Quickstart.md` for the beginner workflow and `godot_project/docs/KnownDifferences.md` for the v1 compatibility boundary.
+
+Regression and QA assets:
+- automated synthetic regression runner: `godot_project/tests/run_basic_regressions.sh`
+- developer-local real-pack acceptance runner: `godot_project/tests/run_basic_real_pack_acceptance.sh`
+- manual QA scripts:
+  - `godot_project/docs/manual-tests/01_scan_and_import.md`
+  - `godot_project/docs/manual-tests/02_preview_and_catalog.md`
+  - `godot_project/docs/manual-tests/03_sample_prefab_inspection.md`
+  - `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
+
+Testing tracks:
+- synthetic regression: no licensed pack required; uses a small importer-valid fixture package for automated and maintainer checks
+- real-pack acceptance: developer-local only; uses your licensed Basic pack to smoke-test the full `.unitypackage` path

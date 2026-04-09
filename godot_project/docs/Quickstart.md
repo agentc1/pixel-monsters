@@ -29,7 +29,6 @@ Look under `res://cainos_imports/basic/`:
 - `textures/source/`
 - `tilesets/`
 - `scenes/`
-- `helpers/`
 - `reports/`
 
 ## How to paint a map
@@ -53,6 +52,32 @@ The importer also generates:
 - `res://cainos_imports/basic/scenes/helpers/basic_prefab_catalog.tscn`
 
 Use them to verify that textures, TileSets, and named prefab scenes imported correctly.
+
+## Automated regression check
+
+From the repository root, you can run the synthetic regression suite:
+
+```bash
+./godot_project/tests/run_basic_regressions.sh
+```
+
+This generates a small synthetic `.unitypackage`, runs the importer against it, forces Godot to finish importing copied resources, and validates the resulting helper scenes and sample prefabs.
+
+Important note:
+- this fixture is **importer-valid** for this addon’s parser and regression suite
+- it is **not** intended to be treated as a Unity-authored package or a package Unity itself must import
+
+## Manual QA scripts
+
+Beginner-friendly manual checks are documented here:
+- `godot_project/docs/manual-tests/01_scan_and_import.md`
+- `godot_project/docs/manual-tests/02_preview_and_catalog.md`
+- `godot_project/docs/manual-tests/03_sample_prefab_inspection.md`
+- `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
+
+Testing tracks:
+- synthetic track: run `./godot_project/tests/run_basic_regressions.sh` with no licensed content
+- real-pack track: run `./godot_project/tests/run_basic_real_pack_acceptance.sh /absolute/path/to/basic.unitypackage`
 
 ## Reimport rule
 
