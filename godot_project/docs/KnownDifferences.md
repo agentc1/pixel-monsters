@@ -7,21 +7,24 @@ This importer is authoring-first. It does not attempt full Unity parity in v1.
 - atlas textures copied into the project
 - paintable `TileSet` resources
 - named prefab scenes for the supported static Basic prefabs
+- an authoring-first import of `SC Demo.unity` as `SC Demo.tscn`
 - `BoxCollider2D`, 2-point `EdgeCollider2D`, and supported `PolygonCollider2D` mappings where they are straightforward
-- helper scenes for preview and prefab browsing
+- runtime-ready rigidbody props and runtime stairs triggers for the supported Basic stair prefabs
+- helper scenes for preview, prefab browsing, and runtime stairs validation
 
 ## Approximated
 
-- prefabs with partial collision fidelity where Unity uses unsupported collider/runtime features
 - fallback atlas-cell scenes when semantic prefab import is unavailable or disabled
 - player helper animation assets, which are preview-oriented rather than a full Unity controller conversion
 
 ## Manual in v1
 
-- prefabs with MonoBehaviour-driven behavior such as stairs or trigger logic
-- rebuilding the Unity demo scenes
+- altar and rune-prefab trigger/animation behavior
+- `SC All Props.unity` scene import
+- scene-level tilemap collider and composite-collider reconstruction from Unity scenes
+- live runtime camera behavior from imported Unity scenes
 - exact sorting semantics from Unity layers, sorting orders, and trigger conventions
-- rigidbody behavior and any remaining unsupported collider cases
+- player/controller runtime behavior and animator parity
 
 ## Unsupported in v1
 

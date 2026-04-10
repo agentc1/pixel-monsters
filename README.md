@@ -17,15 +17,16 @@ Main addon files:
 
 Current v1 shape:
 - recommended input: direct `.unitypackage` or extracted Unity metadata folder
-- default output: named semantic prefab scenes plus paintable `TileSet` resources
+- default output: named semantic prefab scenes, paintable `TileSet` resources, a raw imported `SC Demo` Godot scene, and a framed `SC Demo` preview scene
 - fallback output: atlas-cell scenes when semantic metadata is unavailable or disabled
-- helper assets: preview map, prefab catalog, compatibility report, and import manifest
+- helper assets: preview map, prefab catalog, runtime stairs demo, imported-scene reports, compatibility report, and import manifest
 
 Use `godot_project/docs/Quickstart.md` for the beginner workflow and `godot_project/docs/KnownDifferences.md` for the v1 compatibility boundary.
 
 Regression and QA assets:
 - automated synthetic regression runner: `godot_project/tests/run_basic_regressions.sh`
 - developer-local real-pack acceptance runner: `godot_project/tests/run_basic_real_pack_acceptance.sh`
+- local cleanup script for caches and generated outputs: `tools/cleanup_local_artifacts.sh`
 - manual QA scripts:
   - `godot_project/docs/manual-tests/01_scan_and_import.md`
   - `godot_project/docs/manual-tests/02_preview_and_catalog.md`
@@ -33,6 +34,10 @@ Regression and QA assets:
   - `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
   - `godot_project/docs/manual-tests/05_deferred_behavior_metadata.md`
   - `godot_project/docs/manual-tests/06_polygon_collision_fidelity.md`
+  - `godot_project/docs/manual-tests/07_runtime_rigidbody_props.md`
+  - `godot_project/docs/manual-tests/08_runtime_stairs_support.md`
+  - `godot_project/docs/manual-tests/09_godot_mcp_bridge.md`
+  - `godot_project/docs/manual-tests/10_imported_unity_scene_demo.md`
 
 Testing tracks:
 - synthetic regression: no licensed pack required; uses a small importer-valid fixture package for automated and maintainer checks

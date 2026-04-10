@@ -48,10 +48,13 @@ Check in the Inspector:
 - open the `Metadata` section on the root and confirm `cainos_behavior_hints` exists
 - open the `Metadata` section on `Stairs Layer Trigger`
 - confirm both `cainos_behavior_hints` and `unity_mono_behaviours` exist there
+- confirm `Stairs Layer Trigger` has a script attached
+- confirm the stair visual nodes carry `cainos_visual_stratum` metadata
 
 Expected result:
 - the prefab is visually imported
-- runtime behavior is not implemented here, but the deferred Unity behavior is recorded both as normalized `cainos_behavior_hints` and the legacy raw `unity_mono_behaviours` payload
+- the runtime stairs trigger is already attached
+- the original Unity behavior is still recorded both as normalized `cainos_behavior_hints` and the legacy raw `unity_mono_behaviours` payload
 
 ## 3b. East/West stairs prefabs
 
@@ -69,10 +72,12 @@ Check in the Scene dock:
 Check in the Inspector:
 - on the root node, confirm `cainos_behavior_hints` exists in `Metadata`
 - on `Stairs Layer Trigger`, confirm both `cainos_behavior_hints` and `unity_mono_behaviours` exist
+- confirm `Stairs L` carries `cainos_visual_stratum = lower`
+- confirm `Stairs U` carries `cainos_visual_stratum = upper`
 
 Expected result:
 - the east/west stairs are now generated as scenes instead of remaining unresolved
-- they are still deferred-behavior prefabs, not runnable stairs logic
+- they now include a runtime stairs trigger script plus layered visual strata
 
 ## 4. Player prefab
 
@@ -83,6 +88,7 @@ Open:
 Check in the Scene dock:
 - root node exists
 - at least one sprite child exists
+- a child named `CainosRuntimeActor2D` exists
 
 Check in the 2D view:
 - the player art is visible and crisp, not blurry
@@ -92,6 +98,7 @@ Check in the 2D view:
 - Bush keeps a separate `Shadow` child
 - Stone Lantern keeps a rectangle collision child
 - Stairs preserve deferred Unity behavior metadata
+- Stairs now include runtime stairs support and visual strata metadata
 - East/west stairs now open as generated prefab scenes
 - Player scene opens and shows visible sprite art
 

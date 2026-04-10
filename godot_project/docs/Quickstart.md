@@ -5,9 +5,12 @@
 The addon imports a locally supplied **Pixel Art Top Down - Basic** pack into:
 - external `TileSet` resources for `TileMapLayer`
 - named prefab scenes reconstructed from Unity metadata when available
+- an imported authoring-first Godot scene for `SC Demo.unity`
+- a framed preview wrapper for `SC Demo` so the imported map is centered and readable at runtime
 - fallback atlas-cell scenes only when you enable them
 - player helper assets
 - preview/catalog helper scenes
+- a runtime stairs demo scene
 - manifest, catalog, and compatibility reports
 
 ## First import
@@ -27,9 +30,18 @@ The addon imports a locally supplied **Pixel Art Top Down - Basic** pack into:
 
 Look under `res://cainos_imports/basic/`:
 - `textures/source/`
-- `tilesets/`
+- `tilesets/` including grass, stone ground, wall, struct, and shadow TileSets
 - `scenes/`
 - `reports/`
+
+Important generated scene paths:
+- `res://cainos_imports/basic/scenes/helpers/basic_preview_map.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_prefab_catalog.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_stairs_demo.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC Demo.tscn`
+- `res://cainos_imports/basic/scenes/helpers/sc_demo_preview.tscn`
+
+The importer currently generates `SC Demo.tscn` as the raw authoring import, `sc_demo_preview.tscn` as the framed visual preview, and reports `SC All Props.unity` as discovered but deferred.
 
 ## How to paint a map
 
@@ -50,8 +62,11 @@ Look under `res://cainos_imports/basic/`:
 The importer also generates:
 - `res://cainos_imports/basic/scenes/helpers/basic_preview_map.tscn`
 - `res://cainos_imports/basic/scenes/helpers/basic_prefab_catalog.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_stairs_demo.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC Demo.tscn`
+- `res://cainos_imports/basic/scenes/helpers/sc_demo_preview.tscn`
 
-Use them to verify that textures, TileSets, and named prefab scenes imported correctly.
+Use `SC Demo.tscn` for raw structure/authoring checks and `sc_demo_preview.tscn` for runtime visual validation against the reference screenshot.
 
 ## Automated regression check
 
@@ -76,6 +91,10 @@ Beginner-friendly manual checks are documented here:
 - `godot_project/docs/manual-tests/04_real_pack_acceptance.md`
 - `godot_project/docs/manual-tests/05_deferred_behavior_metadata.md`
 - `godot_project/docs/manual-tests/06_polygon_collision_fidelity.md`
+- `godot_project/docs/manual-tests/07_runtime_rigidbody_props.md`
+- `godot_project/docs/manual-tests/08_runtime_stairs_support.md`
+- `godot_project/docs/manual-tests/09_godot_mcp_bridge.md`
+- `godot_project/docs/manual-tests/10_imported_unity_scene_demo.md`
 
 Testing tracks:
 - synthetic track: run `./godot_project/tests/run_basic_regressions.sh` with no licensed content
@@ -88,6 +107,14 @@ Everything under `res://cainos_imports/basic/` is treated as generated output an
 If you want to customize an imported asset:
 1. duplicate it into your own folder outside `res://cainos_imports/basic/`
 2. edit the duplicate there
+
+## Local cleanup
+
+To remove generated imports and Godot editor cache state from your working tree:
+
+```bash
+./tools/cleanup_local_artifacts.sh
+```
 
 ## Source files and licensing
 

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "godot-mcp"
+version = "0.1.0"
+description = "Repo-local MCP bridge for runtime Godot scene inspection and input simulation."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "mcp>=1.0.0,<2.0.0",
+]
+
+[project.scripts]
+godot-mcp = "godot_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["godot_mcp"]

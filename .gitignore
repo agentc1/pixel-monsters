@@ -6,3 +6,8 @@
 /local_inputs/
 /godot_project/.godot/
 /godot_project/cainos_imports/
+__pycache__/
+*.pyc
+*.pyo
+/.pytest_cache/
+/tools/godot_mcp/.venv/

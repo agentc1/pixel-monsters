@@ -2,11 +2,11 @@
 
 ## Goal
 
-Confirm that manual-behavior prefabs now expose normalized `cainos_behavior_hints` metadata in addition to the legacy raw Unity metadata where applicable.
+Confirm that the remaining manual-behavior prefabs, plus the runtime stairs prefabs, expose normalized `cainos_behavior_hints` metadata in addition to the legacy raw Unity metadata where applicable.
 
 These checks assume you have already imported the Basic pack.
 
-## 1. Stairs trigger
+## 1. Runtime stairs trigger metadata
 
 Open:
 
@@ -20,6 +20,10 @@ Check:
 - confirm the hint includes a `kind` of `stairs_layer_trigger`
 - confirm the hint data contains upper/lower layer and sorting-layer names
 - confirm `unity_mono_behaviours` still exists on `Stairs Layer Trigger`
+
+Expected result:
+- the stairs scene is already runtime-enabled
+- the normalized hint and legacy raw metadata are both still present for traceability
 
 ## 2. Altar trigger
 

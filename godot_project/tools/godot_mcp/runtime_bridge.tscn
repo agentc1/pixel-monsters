@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/godot_mcp/runtime_bridge.gd" id="1_qa2tp"]
+
+[node name="GodotMcpRuntime" type="Node"]
+script = ExtResource("1_qa2tp")
+
+[node name="SceneHost" type="Node" parent="."]

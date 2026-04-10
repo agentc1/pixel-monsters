@@ -2,7 +2,7 @@
 
 ## Goal
 
-Verify that supported `PolygonCollider2D` data now imports into real Godot `CollisionPolygon2D` nodes, while rigidbody-bearing props remain approximated and clearly reported as such.
+Verify that supported `PolygonCollider2D` data now imports into real Godot `CollisionPolygon2D` nodes for both static and runtime-ready rigidbody props.
 
 ## Before you start
 
@@ -30,26 +30,17 @@ Expected result:
 - the scene opens without errors
 - at least one `CollisionPolygon2D` exists
 
-## Approximated polygon + rigidbody samples
+## Runtime-ready polygon + rigidbody samples
 
 Open these scenes:
 - `res://cainos_imports/basic_real_acceptance/scenes/prefabs/props/PF Props - Barrel 01.tscn`
 - `res://cainos_imports/basic_real_acceptance/scenes/prefabs/props/PF Props - Pot 01.tscn`
 
 Expected result:
+- the scene root is `RigidBody2D`
 - the scene still contains `CollisionPolygon2D`
-- the compatibility report still lists the prefab under `Approximated Prefabs`
-- the report entry includes both `polygon_collider_imported` and `rigidbody_deferred`
-
-## Rigidbody-only approximation sample
-
-Open this scene:
-- `res://cainos_imports/basic_real_acceptance/scenes/prefabs/props/PF Props - Crate 01.tscn`
-
-Expected result:
-- the scene has its existing box-style collider
-- it does **not** rely on `CollisionPolygon2D`
-- the compatibility report lists it under `Approximated Prefabs` with `rigidbody_deferred`
+- the compatibility report lists the prefab under `Supported Static Prefabs`
+- the report entry includes both `polygon_collider_imported` and `rigidbody_imported`
 
 ## Report checks
 
@@ -58,9 +49,11 @@ Open:
 
 Confirm:
 - `PF Props - Well 01`, `PF Props - Statue 01`, and `PF Struct - Gate 02` appear under `Supported Static Prefabs`
-- `PF Props - Barrel 01` and `PF Props - Pot 01` appear under `Approximated Prefabs`
+- `PF Props - Barrel 01` and `PF Props - Pot 01` also appear under `Supported Static Prefabs`
 - supported polygon entries mention `polygon_collider_imported`
-- rigidbody-only entries keep `rigidbody_deferred`
+- runtime-ready rigidbody entries include `rigidbody_imported`
+
+For box-collider rigidbody props such as `PF Props - Crate 01`, use Manual Test 07.
 
 ## If it fails
 
