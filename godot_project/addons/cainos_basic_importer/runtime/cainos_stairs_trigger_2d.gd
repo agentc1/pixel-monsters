@@ -35,10 +35,10 @@ func _physics_process(_delta: float) -> void:
 		active_ids[actor_id] = true
 		var is_inside := _actor_is_inside_trigger_region(helper.get_runtime_anchor_global_position())
 		var was_inside := bool(_actor_inside_state.get(actor_id, false))
-		if is_inside and not was_inside:
-			apply_enter_for_actor(actor_root)
-		elif not is_inside and was_inside:
-			apply_exit_for_actor(actor_root)
+		if is_inside:
+			_apply_actor_layer_for_current_side(actor_root)
+		elif was_inside:
+			_apply_actor_layer_for_current_side(actor_root)
 		_actor_inside_state[actor_id] = is_inside
 	var stale_ids: Array = []
 	for actor_id_variant in _actor_inside_state.keys():
@@ -52,15 +52,13 @@ func _physics_process(_delta: float) -> void:
 func apply_enter_for_actor(actor_root: Node) -> void:
 	if not (actor_root is Node2D):
 		return
-	if _matches_upper_condition(actor_root as Node2D):
-		_apply_actor_layer(actor_root as Node2D, upper_layer, upper_sorting_layer)
+	_apply_actor_layer_for_current_side(actor_root as Node2D)
 
 
 func apply_exit_for_actor(actor_root: Node) -> void:
 	if not (actor_root is Node2D):
 		return
-	if _matches_upper_condition(actor_root as Node2D):
-		_apply_actor_layer(actor_root as Node2D, lower_layer, lower_sorting_layer)
+	_apply_actor_layer_for_current_side(actor_root as Node2D)
 
 
 func _connect_trigger_areas(node: Node) -> void:
@@ -92,14 +90,14 @@ func _on_trigger_body_entered(body: Node) -> void:
 	var actor_root := _resolve_actor_root_from_node(body)
 	if actor_root != null:
 		_actor_inside_state[str(actor_root.get_instance_id())] = true
-		apply_enter_for_actor(actor_root)
+		_apply_actor_layer_for_current_side(actor_root)
 
 
 func _on_trigger_body_exited(body: Node) -> void:
 	var actor_root := _resolve_actor_root_from_node(body)
 	if actor_root != null:
 		_actor_inside_state[str(actor_root.get_instance_id())] = false
-		apply_exit_for_actor(actor_root)
+		_apply_actor_layer_for_current_side(actor_root)
 
 
 func _resolve_actor_root_from_node(node: Node) -> Node2D:
@@ -143,6 +141,13 @@ func _matches_upper_condition(actor_root: Node2D) -> bool:
 			return false
 
 
+func _apply_actor_layer_for_current_side(actor_root: Node2D) -> void:
+	if _matches_upper_condition(actor_root):
+		_apply_actor_layer(actor_root, upper_layer, upper_sorting_layer)
+	else:
+		_apply_actor_layer(actor_root, lower_layer, lower_sorting_layer)
+
+
 func _actor_is_inside_trigger_region(global_point: Vector2) -> bool:
 	for segment_variant in _segment_shapes:
 		var a: Vector2 = segment_variant.get("a", Vector2.ZERO)
@@ -171,7 +176,10 @@ func _apply_actor_layer(actor_root: Node2D, layer_name: String, sorting_layer_na
 
 
 func _apply_direct_sprite_mutation(actor_root: Node2D, layer_name: String, sorting_layer_name: String) -> void:
-	var offset := CainosRuntimeActor2D.LAYER_Z_OFFSETS.get(layer_name, 0)
+	if not actor_root.has_meta("cainos_runtime_base_layer_name"):
+		actor_root.set_meta("cainos_runtime_base_layer_name", str(actor_root.get_meta("cainos_runtime_layer_name", lower_layer)))
+	var base_layer_name := str(actor_root.get_meta("cainos_runtime_base_layer_name", lower_layer))
+	var offset := int(CainosRuntimeActor2D.LAYER_BASE_Z.get(layer_name, 0)) - int(CainosRuntimeActor2D.LAYER_BASE_Z.get(base_layer_name, 0))
 	for sprite in _collect_sprites(actor_root):
 		if not sprite.has_meta("cainos_base_z_index"):
 			sprite.set_meta("cainos_base_z_index", int(sprite.z_index))

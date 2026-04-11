@@ -52,7 +52,8 @@ Confirm:
 - the seven props above appear under `Supported Static Prefabs`
 - each report entry includes `rigidbody_imported`
 - none of those seven entries include `rigidbody_deferred`
-- `PF Player` still appears under `Manual Behavior Prefabs` and still includes `rigidbody_deferred`
+- `PF Player` also appears under `Supported Static Prefabs`
+- `PF Player` includes `player_controller_runtime_imported` instead of `rigidbody_deferred`
 
 ## If it fails
 

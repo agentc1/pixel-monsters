@@ -17,9 +17,9 @@ Main addon files:
 
 Current v1 shape:
 - recommended input: direct `.unitypackage` or extracted Unity metadata folder
-- default output: named semantic prefab scenes, paintable `TileSet` resources, a raw imported `SC Demo` Godot scene, and a framed `SC Demo` preview scene
+- default output: named semantic prefab scenes, paintable `TileSet` resources, raw imported `SC Demo` and `SC All Props` Godot scenes, framed preview scenes for both shipped Unity scenes, and a playable `SC Demo Runtime` wrapper scene
 - fallback output: atlas-cell scenes when semantic metadata is unavailable or disabled
-- helper assets: preview map, prefab catalog, runtime stairs demo, imported-scene reports, compatibility report, and import manifest
+- helper assets: preview map, prefab catalog, runtime player/stairs/altar demos, imported-scene reports, compatibility report, and import manifest
 
 Use `godot_project/docs/Quickstart.md` for the beginner workflow and `godot_project/docs/KnownDifferences.md` for the v1 compatibility boundary.
 
@@ -38,6 +38,9 @@ Regression and QA assets:
   - `godot_project/docs/manual-tests/08_runtime_stairs_support.md`
   - `godot_project/docs/manual-tests/09_godot_mcp_bridge.md`
   - `godot_project/docs/manual-tests/10_imported_unity_scene_demo.md`
+  - `godot_project/docs/manual-tests/11_runtime_altar_runes_support.md`
+  - `godot_project/docs/manual-tests/12_runtime_player_support.md`
+  - `godot_project/docs/manual-tests/13_sc_demo_runtime_scene.md`
 
 Testing tracks:
 - synthetic regression: no licensed pack required; uses a small importer-valid fixture package for automated and maintainer checks

@@ -60,11 +60,12 @@ func _init() -> void:
 	var semantic_prefabs: Array = []
 	var sample_prefabs: Dictionary = expected.get("sample_prefabs", {})
 	var sample_scene: Dictionary = expected.get("sample_scene", {})
+	var sample_scene_all_props: Dictionary = expected.get("sample_scene_all_props", {})
 	if FileAccess.file_exists(import_manifest_abs):
 			var import_manifest = JSON.parse_string(FileAccess.get_file_as_string(import_manifest_abs))
 			_assert_true(import_manifest is Dictionary, "Import manifest parses as JSON")
 			if import_manifest is Dictionary:
-				_assert_eq(int(import_manifest.get("format_version", -1)), 8, "Manifest format_version")
+				_assert_eq(int(import_manifest.get("format_version", -1)), 12, "Manifest format_version")
 			var source: Dictionary = import_manifest.get("source", {})
 			_assert_true(not source.has("source_path"), "Persisted manifest omits absolute source_path")
 			_assert_eq(source.get("kind", ""), "unitypackage", "Persisted manifest source kind")
@@ -85,8 +86,8 @@ func _init() -> void:
 			_assert_eq(int(unity_scene_summary.get("deferred_scenes", -1)), int(expected.get("deferred_scenes", -2)), "Manifest deferred Unity scene count")
 			var unity_scenes: Array = import_manifest.get("unity_scenes", [])
 			_assert_eq(unity_scenes.size(), int(expected.get("imported_scenes", 0)) + int(expected.get("deferred_scenes", 0)), "Manifest unity_scenes entry count")
-			_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("imported", "")), "imported", true, int(expected.get("scene_tile_layers", -1)), int(expected.get("scene_prefab_instances", -1)), int(expected.get("scene_skipped_tile_cells", -1)))
-			_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("deferred", "")), "deferred", false, 0, 0, 0)
+			_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("imported", "")), "imported", true, true, int(expected.get("scene_tile_layers", -1)), int(expected.get("scene_prefab_instances", -1)), int(expected.get("scene_skipped_tile_cells", -1)))
+			_assert_unity_scene_entry(unity_scenes, str(sample_scene_all_props.get("imported", "")), "imported", true, false, int(expected.get("all_props_tile_layers", -1)), int(expected.get("all_props_prefab_instances", -1)), int(expected.get("all_props_skipped_tile_cells", -1)))
 
 	_assert_generated_scene(output_root, "plants", str(sample_prefabs.get("bush", "")))
 	_assert_generated_scene(output_root, "props", str(sample_prefabs.get("lantern", "")))
@@ -103,13 +104,16 @@ func _init() -> void:
 	_assert_generated_scene(output_root, "player", str(sample_prefabs.get("player", "")))
 	_assert_generated_imported_scene(output_root, str(sample_scene.get("imported", "")))
 	_assert_generated_imported_scene_preview(output_root, str(sample_scene.get("imported", "")))
+	_assert_generated_imported_scene_runtime(output_root, str(sample_scene.get("runtime", "%s Runtime" % str(sample_scene.get("imported", "")))))
+	_assert_generated_imported_scene(output_root, str(sample_scene_all_props.get("imported", "")))
+	_assert_generated_imported_scene_preview(output_root, str(sample_scene_all_props.get("imported", "")))
 	var broken_scene := output_root.path_join("scenes/prefabs/props/%s.tscn" % _sanitize_filename(str(sample_prefabs.get("broken", ""))))
 	_assert_true(not FileAccess.file_exists(ProjectSettings.globalize_path(broken_scene)), "Unresolved prefab does not generate a scene")
 
 	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("stairs", "")), "supported_static", "stairs_runtime_imported", true)
-	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("altar", "")), "manual_behavior", "altar_trigger_hint", true)
-	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("rune", "")), "manual_behavior", "sprite_color_animation_hint", true)
-	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("player", "")), "manual_behavior", "top_down_character_controller_hint", true)
+	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("altar", "")), "supported_static", "altar_runtime_imported", true)
+	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("rune", "")), "supported_static", "sprite_color_animation_runtime_imported", true)
+	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("player", "")), "supported_static", "player_controller_runtime_imported", true)
 	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("broken", "")), "unresolved_or_skipped", "unresolved_sprite_reference", false)
 	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("complex_edge", "")), "approximated", "edge_collider_deferred_complex", true)
 	_assert_prefab_report_entry(semantic_prefabs, str(sample_prefabs.get("polygon_static", "")), "supported_static", "polygon_collider_imported", true)
@@ -144,6 +148,8 @@ func _init() -> void:
 		_assert_true(bool(player_data.get("requires_rigidbody2d", false)), "Player hint requires rigidbody2d")
 	var player_entry := _find_catalog_prefab_entry(semantic_prefabs, str(sample_prefabs.get("player", "")))
 	_assert_true(Array(player_entry.get("reasons", [])).has("runtime_actor_helper_attached"), "Player report includes runtime actor helper reason")
+	_assert_true(Array(player_entry.get("reasons", [])).has("player_directional_facing_imported"), "Player report includes directional facing reason")
+	_assert_true(not Array(player_entry.get("reasons", [])).has("rigidbody_deferred"), "Player report omits deferred rigidbody reason after runtime import")
 	var rigidbody_box_entry_manifest := _find_catalog_prefab_entry(semantic_prefabs, str(sample_prefabs.get("rigidbody_box", "")))
 	_assert_true(Array(rigidbody_box_entry_manifest.get("reasons", [])).has("runtime_actor_helper_attached"), "Runtime rigidbody report includes runtime actor helper reason")
 	_assert_rigidbody_details(semantic_prefabs, str(sample_prefabs.get("polygon_body", "")), expected.get("rigidbody_polygon_physics", {}), "polygon rigidbody")
@@ -152,7 +158,7 @@ func _init() -> void:
 	var compatibility_report = _load_json_file(output_root.path_join("reports/compatibility_report.json"))
 	_assert_true(compatibility_report is Dictionary, "Compatibility report parses as JSON")
 	if compatibility_report is Dictionary:
-		_assert_eq(int(compatibility_report.get("format_version", -1)), 8, "Compatibility report format_version")
+		_assert_eq(int(compatibility_report.get("format_version", -1)), 12, "Compatibility report format_version")
 		var stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), str(sample_prefabs.get("stairs", "")))
 		_assert_true(not stairs_entry.is_empty(), "Compatibility report includes stairs prefab entry")
 		_assert_eq(str(stairs_entry.get("tier", "")), "supported_static", "Compatibility report stairs tier")
@@ -188,17 +194,23 @@ func _init() -> void:
 		var broken_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), str(sample_prefabs.get("broken", "")))
 		_assert_true(not broken_entry.is_empty(), "Compatibility report includes unresolved prefab entry")
 		_assert_true(Array(broken_entry.get("reasons", [])).has("unresolved_sprite_reference"), "Compatibility report unresolved reason")
+		var player_report_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), str(sample_prefabs.get("player", "")))
+		_assert_true(not player_report_entry.is_empty(), "Compatibility report includes player prefab entry")
+		_assert_eq(str(player_report_entry.get("tier", "")), "supported_static", "Compatibility report player tier")
+		_assert_true(Array(player_report_entry.get("reasons", [])).has("player_controller_runtime_imported"), "Compatibility report player controller reason")
+		_assert_true(Array(player_report_entry.get("reasons", [])).has("player_directional_facing_imported"), "Compatibility report player facing reason")
+		_assert_true(not Array(player_report_entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report omits deferred rigidbody reason for player")
 		var editor_only_entries: Array = compatibility_report.get("editor_only_prefabs", [])
 		_assert_true(not _find_catalog_prefab_entry(editor_only_entries, str(sample_prefabs.get("editor_only", ""))).is_empty(), "Compatibility report includes editor-only prefab entry")
 		_assert_true(_find_tier_prefab_entry(compatibility_report.get("tiers", {}), str(sample_prefabs.get("editor_only", ""))).is_empty(), "Editor-only prefab is excluded from semantic tiers")
 		var unity_scenes: Array = compatibility_report.get("unity_scenes", [])
-		_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("imported", "")), "imported", true, int(expected.get("scene_tile_layers", -1)), int(expected.get("scene_prefab_instances", -1)), int(expected.get("scene_skipped_tile_cells", -1)))
-		_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("deferred", "")), "deferred", false, 0, 0, 0)
+		_assert_unity_scene_entry(unity_scenes, str(sample_scene.get("imported", "")), "imported", true, true, int(expected.get("scene_tile_layers", -1)), int(expected.get("scene_prefab_instances", -1)), int(expected.get("scene_skipped_tile_cells", -1)))
+		_assert_unity_scene_entry(unity_scenes, str(sample_scene_all_props.get("imported", "")), "imported", true, false, int(expected.get("all_props_tile_layers", -1)), int(expected.get("all_props_prefab_instances", -1)), int(expected.get("all_props_skipped_tile_cells", -1)))
 
 	var asset_catalog = _load_json_file(output_root.path_join("reports/asset_catalog.json"))
 	_assert_true(asset_catalog is Dictionary, "Asset catalog parses as JSON")
 	if asset_catalog is Dictionary:
-		_assert_eq(int(asset_catalog.get("format_version", -1)), 8, "Asset catalog format_version")
+		_assert_eq(int(asset_catalog.get("format_version", -1)), 12, "Asset catalog format_version")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("bush", ""))).is_empty(), "Asset catalog includes bush prefab entry")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("stairs", ""))).is_empty(), "Asset catalog includes stairs prefab entry")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("altar", ""))).is_empty(), "Asset catalog includes altar prefab entry")
@@ -211,11 +223,17 @@ func _init() -> void:
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("rigidbody_unsupported", ""))).is_empty(), "Asset catalog includes unsupported-rigidbody prefab entry")
 		_assert_true(_find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("broken", ""))).is_empty(), "Asset catalog omits unresolved prefab entry")
 		_assert_true(_find_catalog_prefab_entry(asset_catalog.get("prefabs", []), str(sample_prefabs.get("editor_only", ""))).is_empty(), "Asset catalog omits editor-only prefab entry")
-		_assert_true(Array(asset_catalog.get("helper_scenes", [])).size() >= 3, "Asset catalog includes runtime stairs demo helper scene")
+		_assert_true(Array(asset_catalog.get("helper_scenes", [])).size() >= 5, "Asset catalog includes runtime demo helper scenes")
 		var imported_scene_entry := _find_imported_scene_entry(asset_catalog.get("imported_scenes", []), str(sample_scene.get("imported", "")))
 		_assert_true(not imported_scene_entry.is_empty(), "Asset catalog includes imported SC Demo scene")
 		if not imported_scene_entry.is_empty():
 			_assert_true(not str(imported_scene_entry.get("preview_scene_path", "")).is_empty(), "Asset catalog records imported SC Demo preview path")
+			_assert_true(not str(imported_scene_entry.get("runtime_scene_path", "")).is_empty(), "Asset catalog records imported SC Demo runtime path")
+		var all_props_entry := _find_imported_scene_entry(asset_catalog.get("imported_scenes", []), str(sample_scene_all_props.get("imported", "")))
+		_assert_true(not all_props_entry.is_empty(), "Asset catalog includes imported SC All Props scene")
+		if not all_props_entry.is_empty():
+			_assert_true(not str(all_props_entry.get("preview_scene_path", "")).is_empty(), "Asset catalog records imported SC All Props preview path")
+			_assert_true(str(all_props_entry.get("runtime_scene_path", "")).is_empty(), "Asset catalog omits runtime path for SC All Props")
 
 	var fallback_output_root := "%s_fallback" % output_root
 	var fallback_result := await importer.import_source(str(fixture_manifest.get("package_path", "")), {
@@ -285,23 +303,37 @@ func _assert_generated_imported_scene_preview(output_root: String, scene_name: S
 	_assert_true(FileAccess.file_exists(ProjectSettings.globalize_path(scene_path)), "Generated imported Unity scene preview exists: %s" % scene_path)
 
 
-func _assert_unity_scene_entry(entries: Array, scene_name: String, expected_status: String, expect_output_path: bool, tile_layer_count: int, prefab_count: int, skipped_tile_cells: int) -> void:
+func _assert_generated_imported_scene_runtime(output_root: String, scene_name: String) -> void:
+	var scene_path := output_root.path_join("scenes/unity/%s.tscn" % scene_name)
+	_assert_true(FileAccess.file_exists(ProjectSettings.globalize_path(scene_path)), "Generated imported Unity runtime scene exists: %s" % scene_path)
+
+
+func _assert_unity_scene_entry(entries: Array, scene_name: String, expected_status: String, expect_output_path: bool, expect_runtime_path: bool, tile_layer_count: int, prefab_count: int, skipped_tile_cells: int) -> void:
 	var entry := _find_imported_scene_entry(entries, scene_name)
 	_assert_true(not entry.is_empty(), "Report includes Unity scene entry for %s" % scene_name)
 	if entry.is_empty():
 		return
 	_assert_eq(str(entry.get("status", "")), expected_status, "Unity scene status for %s" % scene_name)
 	var output_scene_path = entry.get("output_scene_path", null)
+	var raw_scene_path = entry.get("raw_scene_path", null)
 	var preview_scene_path = entry.get("preview_scene_path", null)
+	var runtime_scene_path = entry.get("runtime_scene_path", null)
 	if expect_output_path:
 		_assert_true(output_scene_path != null and not str(output_scene_path).is_empty(), "Unity scene output path recorded for %s" % scene_name)
+		_assert_true(raw_scene_path != null and not str(raw_scene_path).is_empty(), "Unity scene raw scene path recorded for %s" % scene_name)
 		_assert_true(preview_scene_path != null and not str(preview_scene_path).is_empty(), "Unity scene preview path recorded for %s" % scene_name)
+		if expect_runtime_path:
+			_assert_true(runtime_scene_path != null and not str(runtime_scene_path).is_empty(), "Unity scene runtime path recorded for %s" % scene_name)
+		else:
+			_assert_true(runtime_scene_path == null or str(runtime_scene_path).is_empty(), "Unity scene omits runtime path for %s" % scene_name)
 		_assert_eq(int(entry.get("tile_layer_count", -1)), tile_layer_count, "Unity scene tile layer count for %s" % scene_name)
 		_assert_eq(int(entry.get("placed_prefab_count", -1)), prefab_count, "Unity scene prefab count for %s" % scene_name)
 		_assert_eq(int(entry.get("skipped_tile_cell_count", -1)), skipped_tile_cells, "Unity scene skipped tile cell count for %s" % scene_name)
 	else:
 		_assert_true(output_scene_path == null, "Deferred Unity scene omits output path for %s" % scene_name)
+		_assert_true(raw_scene_path == null, "Deferred Unity scene omits raw scene path for %s" % scene_name)
 		_assert_true(preview_scene_path == null, "Deferred Unity scene omits preview path for %s" % scene_name)
+		_assert_true(runtime_scene_path == null, "Deferred Unity scene omits runtime path for %s" % scene_name)
 
 
 func _assert_prefab_report_entry(entries: Array, prefab_name: String, expected_tier: String, expected_reason: String, expect_scene_path: bool) -> void:

@@ -2,21 +2,45 @@
 extends RefCounted
 
 const UnityMetadataRegistry := preload("res://addons/cainos_basic_importer/unity_metadata_registry.gd")
+const CainosAltarTrigger2D := preload("res://addons/cainos_basic_importer/runtime/cainos_altar_trigger_2d.gd")
+const CainosSpriteColorAnimation2D := preload("res://addons/cainos_basic_importer/runtime/cainos_sprite_color_animation_2d.gd")
 const CainosRuntimeActor2D := preload("res://addons/cainos_basic_importer/runtime/cainos_runtime_actor_2d.gd")
+const CainosTopDownPlayerController2D := preload("res://addons/cainos_basic_importer/runtime/cainos_top_down_player_controller_2d.gd")
+const CainosRuntimePlayerBody2D := preload("res://addons/cainos_basic_importer/runtime/cainos_runtime_player_body_2d.gd")
 const CainosImportedScenePreview := preload("res://addons/cainos_basic_importer/runtime/cainos_imported_scene_preview.gd")
 const CainosStairsTrigger2D := preload("res://addons/cainos_basic_importer/runtime/cainos_stairs_trigger_2d.gd")
-const CainosStairsDemoController := preload("res://addons/cainos_basic_importer/runtime/cainos_stairs_demo_controller.gd")
 
 const PACK_ID := "basic"
 const IMPORTER_ID := "cainos_basic_importer"
-const IMPORTER_VERSION := "0.8.0"
-const REPORT_FORMAT_VERSION := 8
+const IMPORTER_VERSION := "0.13.1"
+const REPORT_FORMAT_VERSION := 12
 const DEFAULT_OUTPUT_ROOT := "res://cainos_imports/basic"
 const TILE_SIZE := Vector2i(32, 32)
 const DEFAULT_PPU := 32.0
 const TEXTURE_FILTER_NEAREST := 1
 const STAIR_LOWER_Z_OFFSET := -1
 const STAIR_UPPER_Z_OFFSET := 50
+const FOREGROUND_OCCLUDER_Z_OFFSET := 50
+const BRIDGE_UNDERPASS_CARVE_OFFSET := Vector2(-64.0, -96.0)
+const BRIDGE_UNDERPASS_CARVE_SIZE := Vector2(128.0, 160.0)
+const RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE := Vector2(6.0, 6.0)
+const RUNTIME_ACTOR_COLLISION_LAYER_BIT := 1
+const RUNTIME_ELEVATION_COLLISION_BITS := {
+	"Layer 1": 1,
+	"Layer 2": 2,
+	"Layer 3": 4,
+}
+const UNITY_SORTING_LAYER_BASE_Z := {
+	"Layer 1": 0,
+	"Layer 2": 100,
+	"Layer 3": 200,
+}
+const UNITY_SORTING_LAYER_IDS := {
+	-1869315837: "Layer 1",
+	-44025399: "Layer 2",
+	-105541197: "Layer 3",
+	0: "Layer 1",
+}
 
 const DEFAULT_GENERATION_PROFILE := {
 	"output_root": DEFAULT_OUTPUT_ROOT,
@@ -26,6 +50,7 @@ const DEFAULT_GENERATION_PROFILE := {
 	"generate_preview_scene": true,
 	"generate_player_helpers": true,
 	"generate_unity_scenes": true,
+	"generate_unity_scene_runtime": true,
 }
 
 const REQUIRED_SOURCE_FILES := {
@@ -196,7 +221,7 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 		for prefab_entry_variant in semantic_result.get("catalog_prefabs", []):
 			catalog["prefabs"].append(prefab_entry_variant)
 	if normalized_profile.get("generate_unity_scenes", true) and semantic_registry.get("ok", false):
-		var unity_scene_result := _generate_unity_scenes(semantic_registry, generated_tilesets, semantic_generated, copied_res_paths)
+		var unity_scene_result := _generate_unity_scenes(semantic_registry, generated_tilesets, semantic_generated, copied_res_paths, normalized_profile)
 		if not unity_scene_result.get("ok", false):
 			return unity_scene_result
 		outputs.append_array(unity_scene_result.get("paths", []))
@@ -634,8 +659,8 @@ func _build_compatibility(inventory: Dictionary, profile: Dictionary = {}, seman
 		compatibility.append({
 			"title": "Imported Unity scenes",
 			"status": "supported",
-			"detail": "%s Unity scene(s) were generated as authoring-first Godot scenes in this import run." % generated_scenes,
-			"next": "Use SC Demo Preview for centered visual validation and SC Demo for the raw Godot authoring import.",
+			"detail": "%s Unity scene(s) were generated with raw authoring and framed preview outputs in this import run. Runtime wrappers are included where scene support exists." % generated_scenes,
+			"next": "Use the generated imported-scene entries in the compatibility report to open each raw, preview, or runtime scene.",
 		})
 	elif inventory.get("semantic_available", false) and unity_scene_enabled and int(inventory.get("unity_scene_candidates", 0)) > 0:
 		compatibility.append({
@@ -649,7 +674,7 @@ func _build_compatibility(inventory: Dictionary, profile: Dictionary = {}, seman
 			"title": "Imported Unity scenes",
 			"status": "manual",
 			"detail": "Unity scene import is available for this source, but it was disabled in this run.",
-			"next": "Enable generate_unity_scenes if you want SC Demo imported into a Godot scene.",
+			"next": "Enable generate_unity_scenes if you want the shipped Unity scenes imported into Godot scenes.",
 		})
 
 	if int(inventory.get("unity_scene_deferred", 0)) > 0:
@@ -657,7 +682,7 @@ func _build_compatibility(inventory: Dictionary, profile: Dictionary = {}, seman
 			"title": "Deferred Unity scenes",
 			"status": "manual",
 			"detail": "%s Unity scene(s) were discovered but intentionally deferred in this milestone." % inventory.get("unity_scene_deferred", 0),
-			"next": "Use the generated SC Demo scene now; SC All Props remains a follow-up scene-import target.",
+			"next": "Inspect the compatibility report for the remaining deferred scene names and next-step guidance.",
 		})
 
 	compatibility.append({
@@ -970,7 +995,7 @@ func _generate_semantic_prefab_scene(prefab: Dictionary, sprites: Dictionary, te
 	}
 
 
-func _generate_unity_scenes(semantic_registry: Dictionary, generated_tilesets: Dictionary, semantic_generated: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+func _generate_unity_scenes(semantic_registry: Dictionary, generated_tilesets: Dictionary, semantic_generated: Dictionary, copied_res_paths: Dictionary, profile: Dictionary) -> Dictionary:
 	var scene_entries := []
 	var catalog_entries := []
 	var paths := []
@@ -984,7 +1009,7 @@ func _generate_unity_scenes(semantic_registry: Dictionary, generated_tilesets: D
 	var sprites: Dictionary = semantic_registry.get("sprites", {})
 	for scene_variant in semantic_registry.get("scenes", []):
 		var scene: Dictionary = scene_variant
-		var scene_result := _generate_unity_scene(scene, semantic_registry, generated_tilesets, prefab_scene_paths_by_guid, prefabs_by_guid, sprites, texture_res_paths_by_guid)
+		var scene_result := _generate_unity_scene(scene, semantic_registry, generated_tilesets, prefab_scene_paths_by_guid, prefabs_by_guid, sprites, texture_res_paths_by_guid, profile)
 		if not scene_result.get("ok", false):
 			return scene_result
 		var report_entry: Dictionary = scene_result.get("entry", {})
@@ -999,7 +1024,9 @@ func _generate_unity_scenes(semantic_registry: Dictionary, generated_tilesets: D
 			"unity_asset_path": str(scene.get("path", "")),
 			"status": "deferred",
 			"output_scene_path": null,
+			"raw_scene_path": null,
 			"preview_scene_path": null,
+			"runtime_scene_path": null,
 			"reference_image_path": _local_reference_image_path(),
 			"placed_prefab_count": 0,
 			"tile_layer_count": 0,
@@ -1018,7 +1045,7 @@ func _generate_unity_scenes(semantic_registry: Dictionary, generated_tilesets: D
 	}
 
 
-func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, generated_tilesets: Dictionary, prefab_scene_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Dictionary:
+func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, generated_tilesets: Dictionary, prefab_scene_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary, profile: Dictionary) -> Dictionary:
 	var output_dir := _active_output_root.path_join("scenes/unity")
 	_ensure_dir(ProjectSettings.globalize_path(output_dir))
 	var root := Node2D.new()
@@ -1114,9 +1141,13 @@ func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, gen
 		node_2d.position = _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
 		var local_scale: Vector3 = instance_desc.get("local_scale", Vector3.ONE)
 		node_2d.scale = Vector2(local_scale.x, local_scale.y)
-		node_2d.z_index = _unity_scene_layer_base_z(str(instance_desc.get("layer_name", "Layer 1"))) + _unity_local_z_z_index_offset(local_position.z)
+		var scene_layer_name := str(instance_desc.get("layer_name", "Layer 1"))
+		var scene_layer_base_z := _unity_scene_layer_base_z(scene_layer_name)
+		node_2d.z_index = scene_layer_base_z + _unity_local_z_z_index_offset(local_position.z)
 		node_2d.set_meta("unity_source_prefab", str(instance_desc.get("source_prefab_path", "")))
 		node_2d.set_meta("unity_parent_scene_path", str(instance_desc.get("parent_scene_path", "")))
+		node_2d.set_meta("unity_scene_layer_name", scene_layer_name)
+		node_2d.set_meta("cainos_scene_layer_base_z", scene_layer_base_z)
 		node_2d.set_meta("unity_scene_instance_overrides", {
 			"renderer_overrides": instance_desc.get("renderer_overrides", {}),
 			"mono_overrides": instance_desc.get("mono_overrides", {}),
@@ -1124,6 +1155,7 @@ func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, gen
 			"unsupported_override_paths": instance_desc.get("unsupported_override_paths", []),
 		})
 		_apply_unity_scene_instance_overrides(node_2d, instance_desc, prefabs_by_guid.get(prefab_guid, {}))
+		_apply_basic_foreground_occluder_conventions(node_2d)
 		target_parent.add_child(node_2d)
 		placed_prefab_count += 1
 
@@ -1143,16 +1175,47 @@ func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, gen
 	if not preview_result.get("ok", false):
 		return preview_result
 	var preview_scene_path := str(preview_result.get("path", ""))
+	var runtime_scene_enabled := bool(profile.get("generate_unity_scene_runtime", true)) and bool(scene.get("runtime_supported", false))
+	var runtime_scene_path = ""
+	var runtime_scene_detail := ""
+	if runtime_scene_enabled:
+		var runtime_result := _generate_unity_scene_runtime(
+			scene,
+			scene_output_path,
+			prefab_scene_paths_by_guid,
+			prefabs_by_guid,
+			sprites,
+			texture_res_paths_by_guid
+		)
+		if not runtime_result.get("ok", false):
+			return runtime_result
+		runtime_scene_path = str(runtime_result.get("path", ""))
+		runtime_scene_detail = str(runtime_result.get("detail", ""))
 	var reference_image_path := _local_reference_image_path()
+	var remaining_deferred_features := _remaining_unity_scene_deferred_features(scene)
+	if not runtime_scene_path.is_empty():
+		remaining_deferred_features.erase("runtime_wrapper_unavailable")
+	elif runtime_scene_enabled:
+		remaining_deferred_features["runtime_wrapper_unavailable"] = runtime_scene_detail if not runtime_scene_detail.is_empty() else "Runtime wrapper generation was skipped for this import."
+	var scene_paths := [scene_output_path, preview_scene_path]
+	if not runtime_scene_path.is_empty():
+		scene_paths.append(runtime_scene_path)
+	var detail := "Imported as a raw authoring scene plus a framed preview and a playable runtime wrapper scene."
+	var next_step := "Use %s for playable validation, %s for framed comparison, and %s for raw authoring." % [runtime_scene_path if not runtime_scene_path.is_empty() else scene_output_path, preview_scene_path, scene_output_path]
+	if runtime_scene_path.is_empty():
+		detail = "Imported as a raw authoring scene plus a framed preview scene."
+		next_step = "Use %s for framed comparison and %s for raw authoring." % [preview_scene_path, scene_output_path]
 	return {
 		"ok": true,
 		"path": scene_output_path,
-		"paths": [scene_output_path, preview_scene_path],
+		"paths": scene_paths,
 		"catalog_entry": {
 			"name": str(scene.get("name", "")),
 			"path": scene_output_path,
+			"raw_scene_path": scene_output_path,
 			"origin": "unity_scene",
 			"preview_scene_path": preview_scene_path,
+			"runtime_scene_path": runtime_scene_path,
 			"reference_image_path": reference_image_path,
 		},
 		"entry": {
@@ -1160,14 +1223,16 @@ func _generate_unity_scene(scene: Dictionary, semantic_registry: Dictionary, gen
 			"unity_asset_path": str(scene.get("path", "")),
 			"status": "imported",
 			"output_scene_path": scene_output_path,
+			"raw_scene_path": scene_output_path,
 			"preview_scene_path": preview_scene_path,
+			"runtime_scene_path": runtime_scene_path,
 			"reference_image_path": reference_image_path,
 			"placed_prefab_count": placed_prefab_count,
 			"tile_layer_count": generated_tile_layers,
 			"skipped_tile_cell_count": skipped_tile_cells,
-			"deferred_features": scene.get("deferred_feature_counts", {}),
-			"detail": "Imported as an authoring-first Godot scene with TileMapLayer layers, placed prefab instances, scene markers, and a separate framed preview scene.",
-			"next_step": "Open %s for a readable, centered preview or %s for the raw authoring import." % [preview_scene_path, scene_output_path],
+			"deferred_features": remaining_deferred_features,
+			"detail": detail,
+			"next_step": next_step,
 		},
 	}
 
@@ -1205,6 +1270,558 @@ func _generate_unity_scene_preview(scene_name: String, scene_output_path: String
 		"ok": true,
 		"path": scene_path,
 	}
+
+
+func _generate_unity_scene_runtime(scene: Dictionary, raw_scene_path: String, prefab_scene_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Dictionary:
+	var packed := load(raw_scene_path)
+	if not (packed is PackedScene):
+		return {"ok": false, "error": "Could not load raw Unity scene for runtime wrapper: %s" % raw_scene_path}
+	var raw_instance := (packed as PackedScene).instantiate()
+	if not (raw_instance is Node2D):
+		if raw_instance != null:
+			raw_instance.free()
+		return {"ok": false, "error": "Raw Unity scene is not a Node2D: %s" % raw_scene_path}
+
+	var runtime_player_result := _build_unity_scene_runtime_player(
+		scene,
+		raw_instance as Node2D,
+		prefab_scene_paths_by_guid,
+		prefabs_by_guid,
+		sprites,
+		texture_res_paths_by_guid
+	)
+	if bool(runtime_player_result.get("skipped", false)):
+		raw_instance.free()
+		return {
+			"ok": true,
+			"skipped": true,
+			"path": "",
+			"detail": str(runtime_player_result.get("detail", "Runtime scene generation skipped.")),
+		}
+	if not runtime_player_result.get("ok", false):
+		raw_instance.free()
+		return runtime_player_result
+	_configure_unity_scene_runtime_collision_objects(raw_instance)
+
+	var root := Node2D.new()
+	root.name = "%s Runtime" % str(scene.get("name", "SC Demo"))
+	root.set_meta("unity_scene_origin", str(scene.get("path", "")))
+	root.set_meta("unity_scene_runtime_source", raw_scene_path)
+
+	var scene_instance_root := Node2D.new()
+	scene_instance_root.name = "SceneInstance"
+	root.add_child(scene_instance_root)
+	scene_instance_root.add_child(raw_instance)
+
+	var collision_root := _build_unity_scene_collision_root(scene, _runtime_bridge_underpass_carve_rects_by_layer(scene))
+	root.add_child(collision_root)
+
+	var runtime_player := runtime_player_result.get("node") as CharacterBody2D
+	root.add_child(runtime_player)
+
+	var scene_bounds := _compute_canvas_bounds(raw_instance)
+	var camera_marker := _primary_scene_camera_marker(scene)
+	_configure_unity_scene_runtime_camera(runtime_player, scene_bounds, camera_marker, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
+
+	_assign_scene_owner(root, root)
+	var packed_scene := PackedScene.new()
+	var pack_err := packed_scene.pack(root)
+	if pack_err != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack Unity runtime scene: %s" % str(scene.get("name", ""))}
+	var scene_path := _active_output_root.path_join("scenes/unity/%s Runtime.tscn" % str(scene.get("name", "SC Demo")))
+	var save_err := _save_resource(packed_scene, scene_path)
+	if save_err != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save Unity runtime scene: %s" % scene_path}
+	root.free()
+	return {"ok": true, "path": scene_path}
+
+
+func _build_unity_scene_runtime_player(scene: Dictionary, raw_scene_root: Node2D, prefab_scene_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Dictionary:
+	var player_info := _unity_scene_player_instance_info(scene, prefab_scene_paths_by_guid)
+	if player_info.is_empty():
+		return {
+			"ok": false,
+			"skipped": true,
+			"detail": "Runtime scene generation requires a PF Player instance in the imported Unity scene.",
+		}
+	_remove_unity_scene_placeholder_player(raw_scene_root)
+
+	var player_scene_path := str(player_info.get("scene_path", ""))
+	var prefab_guid := str(player_info.get("prefab_guid", ""))
+	var player_instance: Node = null
+	if not player_scene_path.is_empty():
+		var player_packed := load(player_scene_path)
+		if player_packed is PackedScene:
+			player_instance = (player_packed as PackedScene).instantiate()
+	if player_instance == null and not prefab_guid.is_empty():
+		player_instance = _instantiate_unity_scene_prefab(prefab_guid, prefab_scene_paths_by_guid, prefabs_by_guid, sprites, texture_res_paths_by_guid)
+	if player_instance == null:
+		return {"ok": false, "error": "Could not build PF Player for Unity runtime wrapper."}
+	if not (player_instance is Node2D):
+		if player_instance != null:
+			player_instance.free()
+		return {"ok": false, "error": "PF Player scene did not instantiate as Node2D: %s" % player_scene_path}
+
+	var runtime_player := CharacterBody2D.new()
+	var player_layer_name := str(player_info.get("layer_name", "Layer 1"))
+	runtime_player.name = "RuntimePlayer"
+	runtime_player.position = Vector2(player_info.get("spawn_position", Vector2.ZERO))
+	runtime_player.scale = Vector2(player_info.get("spawn_scale", Vector2.ONE))
+	runtime_player.collision_layer = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+	runtime_player.collision_mask = _runtime_elevation_collision_bit(player_layer_name)
+	runtime_player.set_script(CainosRuntimePlayerBody2D)
+	runtime_player.set_meta("unity_runtime_player", true)
+	runtime_player.set_meta("cainos_runtime_elevation_body", true)
+	runtime_player.set_meta("cainos_runtime_collision_layer_name", player_layer_name)
+	runtime_player.set_meta("cainos_runtime_collision_mask", int(runtime_player.collision_mask))
+
+	var player_root := player_instance as Node2D
+	player_root.position = Vector2.ZERO
+	player_root.scale = Vector2.ONE
+	runtime_player.add_child(player_root)
+
+	var collision_result := _clone_player_collision_to_runtime_player(player_root, runtime_player)
+	if not collision_result.get("ok", false):
+		runtime_player.free()
+		return collision_result
+
+	var follow_camera := Camera2D.new()
+	follow_camera.name = "FollowCamera2D"
+	runtime_player.add_child(follow_camera)
+
+	_configure_unity_scene_runtime_player_instance(player_root, player_layer_name)
+	runtime_player.set("player_root_path", NodePath("PF Player"))
+	runtime_player.set("controller_path", NodePath("PF Player"))
+	runtime_player.set("follow_camera_path", NodePath("FollowCamera2D"))
+	return {
+		"ok": true,
+		"node": runtime_player,
+		"spawn_position": Vector2(player_info.get("spawn_position", Vector2.ZERO)),
+	}
+
+
+func _configure_unity_scene_runtime_player_instance(player_root: Node2D, layer_name: String) -> void:
+	if player_root.has_method("set"):
+		player_root.set("movement_mode", "external_body")
+		player_root.set("movement_bounds", Rect2())
+		player_root.set("walkable_regions", [])
+	player_root.set_meta("cainos_runtime_scene_player", true)
+	var actor_helper := player_root.get_node_or_null("CainosRuntimeActor2D")
+	if actor_helper != null:
+		actor_helper.set("base_layer_name", layer_name)
+		actor_helper.set("base_sorting_layer_name", layer_name)
+
+
+func _unity_scene_player_instance_info(scene: Dictionary, prefab_scene_paths_by_guid: Dictionary) -> Dictionary:
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", ""))
+		if not source_prefab_path.contains("/Prefab/Player/"):
+			continue
+		var prefab_guid := str(instance.get("source_prefab_guid", ""))
+		if prefab_guid.is_empty():
+			continue
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var local_scale: Vector3 = instance.get("local_scale", Vector3.ONE)
+		return {
+			"prefab_guid": prefab_guid,
+			"scene_path": str(prefab_scene_paths_by_guid.get(prefab_guid, "")),
+			"spawn_position": _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU),
+			"spawn_scale": Vector2(local_scale.x, local_scale.y),
+			"layer_name": str(instance.get("layer_name", "Layer 1")),
+		}
+	return {}
+
+
+func _remove_unity_scene_placeholder_player(raw_scene_root: Node2D) -> void:
+	var player_placeholder := raw_scene_root.get_node_or_null("Prefabs/PF Player")
+	if player_placeholder == null:
+		player_placeholder = raw_scene_root.find_child("PF Player", true, false)
+	if player_placeholder != null and player_placeholder.get_parent() != null:
+		player_placeholder.get_parent().remove_child(player_placeholder)
+		player_placeholder.free()
+
+
+func _clone_player_collision_to_runtime_player(player_root: Node2D, runtime_player: CharacterBody2D) -> Dictionary:
+	var source_owner := player_root.get_node_or_null("BoxCollider_0")
+	if not (source_owner is Node2D):
+		return {"ok": false, "error": "PF Player did not include BoxCollider_0 for runtime scene generation."}
+	var source_shape_node := _first_collision_shape_descendant(source_owner)
+	if source_shape_node == null or source_shape_node.shape == null:
+		return {"ok": false, "error": "PF Player collider shape was missing for runtime scene generation."}
+	var wrapper_shape := CollisionShape2D.new()
+	wrapper_shape.name = "CollisionShape2D"
+	wrapper_shape.position = (source_owner as Node2D).position + source_shape_node.position
+	var duplicated_shape := source_shape_node.shape.duplicate(true)
+	if duplicated_shape is RectangleShape2D:
+		var rectangle_shape := duplicated_shape as RectangleShape2D
+		rectangle_shape.size = Vector2(
+			minf(rectangle_shape.size.x, RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE.x),
+			minf(rectangle_shape.size.y, RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE.y)
+		)
+	wrapper_shape.shape = duplicated_shape
+	wrapper_shape.set_meta("cainos_runtime_player_footprint", true)
+	runtime_player.add_child(wrapper_shape)
+	_disable_collision_object(source_owner)
+	return {"ok": true}
+
+
+func _first_collision_shape_descendant(node: Node) -> CollisionShape2D:
+	if node is CollisionShape2D:
+		return node as CollisionShape2D
+	for child in node.get_children():
+		var collision_shape := _first_collision_shape_descendant(child)
+		if collision_shape != null:
+			return collision_shape
+	return null
+
+
+func _disable_collision_object(node: Node) -> void:
+	if node is CollisionObject2D:
+		var collision_object := node as CollisionObject2D
+		collision_object.collision_layer = 0
+		collision_object.collision_mask = 0
+	if node is CollisionShape2D:
+		(node as CollisionShape2D).disabled = true
+	for child in node.get_children():
+		_disable_collision_object(child)
+
+
+func _configure_unity_scene_runtime_collision_objects(node: Node) -> void:
+	if node is CollisionObject2D:
+		var collision_object := node as CollisionObject2D
+		if collision_object is Area2D:
+			collision_object.collision_layer = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+			collision_object.collision_mask = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+			collision_object.set_meta("cainos_runtime_trigger_collision", true)
+		else:
+			var layer_name := _runtime_collision_layer_name_for_node(collision_object)
+			collision_object.collision_layer = _runtime_elevation_collision_bit(layer_name)
+			collision_object.collision_mask = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+			collision_object.set_meta("cainos_runtime_collision_layer_name", layer_name)
+			collision_object.set_meta("cainos_runtime_collision_layer_bit", int(collision_object.collision_layer))
+	for child in node.get_children():
+		_configure_unity_scene_runtime_collision_objects(child)
+
+
+func _runtime_collision_layer_name_for_node(node: Node) -> String:
+	var base_layer_name := _runtime_base_layer_name_for_node(node)
+	var source_prefab_path := _nearest_meta_string(node, "unity_source_prefab").to_lower()
+	if source_prefab_path.contains("wooden gate"):
+		return _next_runtime_layer_name(base_layer_name)
+	var current := node
+	while current != null:
+		var label := str(current.name).to_lower()
+		if label.contains("collider upper"):
+			return _next_runtime_layer_name(base_layer_name)
+		if label.contains("collider lower"):
+			return base_layer_name
+		if source_prefab_path.contains("gate") and label.contains("collider t"):
+			return _next_runtime_layer_name(base_layer_name)
+		current = current.get_parent()
+	return base_layer_name
+
+
+func _runtime_base_layer_name_for_node(node: Node) -> String:
+	var meta_layer := _nearest_meta_string(node, "unity_scene_layer_name")
+	if not meta_layer.is_empty():
+		return meta_layer
+	meta_layer = _nearest_meta_string(node, "cainos_effective_sorting_layer_name")
+	if not meta_layer.is_empty():
+		return meta_layer
+	if node != null:
+		var path_text := str(node.get_path()).to_lower()
+		if path_text.contains("/layer 3/"):
+			return "Layer 3"
+		if path_text.contains("/layer 2/"):
+			return "Layer 2"
+	return "Layer 1"
+
+
+func _nearest_meta_string(node: Node, meta_name: String) -> String:
+	var current := node
+	while current != null:
+		if current.has_meta(meta_name):
+			return str(current.get_meta(meta_name))
+		current = current.get_parent()
+	return ""
+
+
+func _runtime_elevation_collision_bit(layer_name: String) -> int:
+	return int(RUNTIME_ELEVATION_COLLISION_BITS.get(layer_name, RUNTIME_ELEVATION_COLLISION_BITS["Layer 1"]))
+
+
+func _next_runtime_layer_name(layer_name: String) -> String:
+	match layer_name:
+		"Layer 1":
+			return "Layer 2"
+		"Layer 2":
+			return "Layer 3"
+		_:
+			return "Layer 3"
+
+
+func _build_unity_scene_collision_root(scene: Dictionary, carve_rects_by_layer := {}) -> Node2D:
+	var root := Node2D.new()
+	root.name = "SceneCollision"
+	for tilemap_variant in scene.get("tilemaps", []):
+		var tilemap: Dictionary = tilemap_variant
+		var collision: Dictionary = tilemap.get("collision", {})
+		if collision.is_empty() or not bool(collision.get("runtime_supported", false)):
+			continue
+		var body := StaticBody2D.new()
+		body.name = "%s Collision" % str(tilemap.get("name", "Tilemap"))
+		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
+		body.collision_layer = _runtime_elevation_collision_bit(layer_name)
+		body.collision_mask = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
+		body.position = _unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU) + _unity_vector2_to_godot_px(collision.get("offset", Vector2.ZERO), DEFAULT_PPU)
+		body.set_meta("unity_layer_name", layer_name)
+		body.set_meta("cainos_runtime_collision_layer_name", layer_name)
+		body.set_meta("cainos_runtime_collision_layer_bit", int(body.collision_layer))
+		body.set_meta("unity_scene_node_path", str(tilemap.get("scene_node_path", "")))
+		var local_carve_rects := _runtime_local_carve_rects_for_layer(layer_name, carve_rects_by_layer, body.position)
+		if str(collision.get("geometry_mode", "")) == "composite_paths":
+			var path_index := 0
+			for path_variant in collision.get("composite_paths", []):
+				var path: Array = path_variant
+				if path.size() < 3:
+					continue
+				var polygon := PackedVector2Array()
+				for point_variant in path:
+					polygon.append(_unity_vector2_to_godot_px(point_variant, DEFAULT_PPU))
+				var polygon_node := CollisionPolygon2D.new()
+				polygon_node.name = "CollisionPolygon2D_%d" % path_index
+				polygon_node.polygon = polygon
+				body.add_child(polygon_node)
+				path_index += 1
+		else:
+			for rect_variant in _tile_collision_rect_runs(tilemap.get("cells", []), local_carve_rects):
+				var rect: Rect2 = rect_variant
+				var shape_node := CollisionShape2D.new()
+				shape_node.name = "CollisionShape2D"
+				var shape := RectangleShape2D.new()
+				shape.size = rect.size
+				shape_node.position = rect.position + rect.size * 0.5
+				shape_node.shape = shape
+				body.add_child(shape_node)
+		if body.get_child_count() > 0:
+			root.add_child(body)
+		else:
+			body.free()
+	return root
+
+
+func _runtime_bridge_underpass_carve_rects_by_layer(scene: Dictionary) -> Dictionary:
+	var carve_rects_by_layer := {}
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
+		if not source_prefab_path.contains("/pf struct - gate"):
+			continue
+		var layer_name := str(instance.get("layer_name", "Layer 1"))
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
+		var carve_rect := Rect2(root_position + BRIDGE_UNDERPASS_CARVE_OFFSET, BRIDGE_UNDERPASS_CARVE_SIZE)
+		var layer_rects: Array = carve_rects_by_layer.get(layer_name, [])
+		layer_rects.append(carve_rect)
+		carve_rects_by_layer[layer_name] = layer_rects
+	return carve_rects_by_layer
+
+
+func _runtime_local_carve_rects_for_layer(layer_name: String, carve_rects_by_layer: Dictionary, collision_body_position: Vector2) -> Array:
+	var local_rects := []
+	for rect_variant in carve_rects_by_layer.get(layer_name, []):
+		var rect: Rect2 = rect_variant
+		local_rects.append(Rect2(rect.position - collision_body_position, rect.size))
+	return local_rects
+
+
+func _tile_collision_rect_runs(cells_variant, carve_rects := []) -> Array:
+	var rows := {}
+	for cell_variant in cells_variant:
+		var cell: Dictionary = cell_variant
+		var coords: Vector2i = cell.get("coords", Vector2i.ZERO)
+		var cell_rect := Rect2(Vector2(coords.x * TILE_SIZE.x, coords.y * TILE_SIZE.y), Vector2(TILE_SIZE))
+		if _rect_intersects_any(cell_rect, carve_rects):
+			continue
+		var row: Array = rows.get(coords.y, [])
+		if not row.has(coords.x):
+			row.append(coords.x)
+		rows[coords.y] = row
+	var row_rects := []
+	var row_keys := rows.keys()
+	row_keys.sort()
+	for y_variant in row_keys:
+		var y := int(y_variant)
+		var x_values: Array = rows.get(y, [])
+		x_values.sort()
+		if x_values.is_empty():
+			continue
+		var run_start := int(x_values[0])
+		var previous := run_start
+		for index in range(1, x_values.size()):
+			var x := int(x_values[index])
+			if x == previous + 1:
+				previous = x
+				continue
+			row_rects.append(Rect2(Vector2(run_start * TILE_SIZE.x, y * TILE_SIZE.y), Vector2((previous - run_start + 1) * TILE_SIZE.x, TILE_SIZE.y)))
+			run_start = x
+			previous = x
+		row_rects.append(Rect2(Vector2(run_start * TILE_SIZE.x, y * TILE_SIZE.y), Vector2((previous - run_start + 1) * TILE_SIZE.x, TILE_SIZE.y)))
+	var merged := []
+	for rect_variant in row_rects:
+		var rect: Rect2 = rect_variant
+		var merged_existing := false
+		for index in range(merged.size()):
+			var existing: Rect2 = merged[index]
+			if is_equal_approx(existing.position.x, rect.position.x) and is_equal_approx(existing.size.x, rect.size.x) and is_equal_approx(existing.position.y + existing.size.y, rect.position.y):
+				existing.size.y += rect.size.y
+				merged[index] = existing
+				merged_existing = true
+				break
+		if not merged_existing:
+			merged.append(rect)
+	return merged
+
+
+func _rect_intersects_any(rect: Rect2, others: Array) -> bool:
+	for other_variant in others:
+		var other: Rect2 = other_variant
+		if rect.intersects(other):
+			return true
+	return false
+
+
+func _primary_scene_camera_marker(scene: Dictionary) -> Dictionary:
+	var cameras: Array = scene.get("camera_markers", [])
+	if cameras.is_empty():
+		return {}
+	return Dictionary(cameras[0])
+
+
+func _configure_unity_scene_runtime_camera(runtime_player: CharacterBody2D, scene_bounds: Rect2, camera_marker: Dictionary, player_spawn_position: Vector2) -> void:
+	var marker_position := Vector2.ZERO
+	var orthographic_size := 5.0
+	if not camera_marker.is_empty():
+		var camera_position: Vector3 = camera_marker.get("position", Vector3.ZERO)
+		marker_position = _unity_vector2_to_godot_px(Vector2(camera_position.x, camera_position.y), DEFAULT_PPU)
+		orthographic_size = float(camera_marker.get("orthographic_size", 5.0))
+	runtime_player.set("camera_limits", _camera_limits_rect(scene_bounds))
+	runtime_player.set("camera_offset", marker_position - player_spawn_position)
+	runtime_player.set("camera_unity_orthographic_size", orthographic_size)
+
+
+func _camera_limits_rect(bounds: Rect2) -> Rect2i:
+	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
+		return Rect2i()
+	return Rect2i(
+		floori(bounds.position.x),
+		floori(bounds.position.y),
+		ceili(bounds.size.x),
+		ceili(bounds.size.y)
+	)
+
+
+func _compute_canvas_bounds(node: Node) -> Rect2:
+	var accumulator := {
+		"has_bounds": false,
+		"min": Vector2.ZERO,
+		"max": Vector2.ZERO,
+	}
+	_accumulate_canvas_bounds(node, accumulator)
+	if not bool(accumulator.get("has_bounds", false)):
+		return Rect2(Vector2.ZERO, Vector2.ZERO)
+	var min_point: Vector2 = accumulator.get("min", Vector2.ZERO)
+	var max_point: Vector2 = accumulator.get("max", Vector2.ZERO)
+	return Rect2(min_point, max_point - min_point)
+
+
+func _accumulate_canvas_bounds(node: Node, accumulator: Dictionary) -> void:
+	if node is Sprite2D and (node as CanvasItem).visible:
+		_accumulate_sprite_canvas_bounds(node as Sprite2D, accumulator)
+	elif node is TileMapLayer and (node as CanvasItem).visible:
+		_accumulate_tile_layer_canvas_bounds(node as TileMapLayer, accumulator)
+	for child in node.get_children():
+		_accumulate_canvas_bounds(child, accumulator)
+
+
+func _accumulate_sprite_canvas_bounds(sprite: Sprite2D, accumulator: Dictionary) -> void:
+	var size := Vector2.ZERO
+	if sprite.region_enabled:
+		size = sprite.region_rect.size
+	elif sprite.texture != null:
+		size = sprite.texture.get_size()
+	if size.x <= 0.0 or size.y <= 0.0:
+		return
+	var origin := sprite.offset
+	if sprite.centered:
+		origin -= size * 0.5
+	_expand_canvas_rect(accumulator, sprite.get_global_transform(), Rect2(origin, size))
+
+
+func _accumulate_tile_layer_canvas_bounds(layer: TileMapLayer, accumulator: Dictionary) -> void:
+	if not layer.has_method("get_used_cells"):
+		return
+	var used_cells_variant = layer.call("get_used_cells")
+	if not (used_cells_variant is Array):
+		return
+	var used_cells: Array = used_cells_variant
+	if used_cells.is_empty():
+		return
+	var min_cell := Vector2i(used_cells[0])
+	var max_cell := min_cell
+	for cell_variant in used_cells:
+		var cell: Vector2i = cell_variant
+		min_cell.x = mini(min_cell.x, cell.x)
+		min_cell.y = mini(min_cell.y, cell.y)
+		max_cell.x = maxi(max_cell.x, cell.x)
+		max_cell.y = maxi(max_cell.y, cell.y)
+	var local_rect := Rect2(
+		Vector2(min_cell) * Vector2(TILE_SIZE.x, TILE_SIZE.y),
+		Vector2(max_cell - min_cell + Vector2i.ONE) * Vector2(TILE_SIZE.x, TILE_SIZE.y)
+	)
+	_expand_canvas_rect(accumulator, layer.get_global_transform(), local_rect)
+
+
+func _expand_canvas_rect(accumulator: Dictionary, transform_2d: Transform2D, rect: Rect2) -> void:
+	var corners := [
+		rect.position,
+		rect.position + Vector2(rect.size.x, 0.0),
+		rect.position + Vector2(0.0, rect.size.y),
+		rect.position + rect.size,
+	]
+	for corner_variant in corners:
+		var point: Vector2 = transform_2d * corner_variant
+		_expand_canvas_point(accumulator, point)
+
+
+func _expand_canvas_point(accumulator: Dictionary, point: Vector2) -> void:
+	if not bool(accumulator.get("has_bounds", false)):
+		accumulator["has_bounds"] = true
+		accumulator["min"] = point
+		accumulator["max"] = point
+		return
+	var min_point: Vector2 = accumulator.get("min", point)
+	var max_point: Vector2 = accumulator.get("max", point)
+	accumulator["min"] = Vector2(minf(min_point.x, point.x), minf(min_point.y, point.y))
+	accumulator["max"] = Vector2(maxf(max_point.x, point.x), maxf(max_point.y, point.y))
+
+
+func _remaining_unity_scene_deferred_features(scene: Dictionary) -> Dictionary:
+	var deferred := {}
+	var scene_level_mono_behaviours: Array = scene.get("scene_level_mono_behaviours", [])
+	if not scene_level_mono_behaviours.is_empty():
+		deferred["scene_level_mono_behaviours"] = scene_level_mono_behaviours.size()
+	var camera_scripts := 0
+	for camera_variant in scene.get("camera_markers", []):
+		var camera: Dictionary = camera_variant
+		camera_scripts += Array(camera.get("script_paths", [])).size()
+	if camera_scripts > 0:
+		deferred["camera_scripts"] = camera_scripts
+	return deferred
 
 
 func _instantiate_unity_scene_prefab(prefab_guid: String, prefab_scene_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary, sprites: Dictionary, texture_res_paths_by_guid: Dictionary) -> Node2D:
@@ -1261,15 +1878,16 @@ func _apply_unity_scene_instance_overrides(instance_root: Node2D, instance_desc:
 			sprite.flip_h = bool(int(overrides.get("m_FlipX", 0)))
 		if overrides.has("m_FlipY"):
 			sprite.flip_v = bool(int(overrides.get("m_FlipY", 0)))
-		var local_z_offset := int(sprite.get_meta("cainos_unity_local_z_offset", 0))
-		if overrides.has("m_SortingOrder"):
-			sprite.z_index = int(overrides.get("m_SortingOrder", 0)) + local_z_offset
-		if overrides.has("m_SortingLayerID"):
-			var sorting_layer_id := int(overrides.get("m_SortingLayerID", 0))
-			sprite.set_meta("sorting_layer_id", sorting_layer_id)
-			var base_z := _unity_scene_layer_base_z(_unity_sorting_layer_name(sorting_layer_id))
+		if overrides.has("m_SortingOrder") or overrides.has("m_SortingLayerID"):
+			var source_sorting_layer_id := int(sprite.get_meta("sorting_layer_id", 0))
+			var source_sorting_order := int(sprite.get_meta("cainos_source_sorting_order", 0))
+			var local_z_offset := int(sprite.get_meta("cainos_unity_local_z_offset", 0))
+			var sorting_layer_id := int(overrides.get("m_SortingLayerID", source_sorting_layer_id))
+			var sorting_order := int(overrides.get("m_SortingOrder", source_sorting_order))
 			sprite.z_as_relative = false
-			sprite.z_index = base_z + int(overrides.get("m_SortingOrder", sprite.get_meta("cainos_source_sorting_order", 0))) + local_z_offset
+			sprite.z_index = _unity_effective_sprite_z_from_parts(_unity_sorting_layer_name(sorting_layer_id), sorting_order, local_z_offset)
+			_set_sprite_sorting_metadata(sprite, sorting_layer_id, sorting_order, local_z_offset)
+			_refresh_basic_foreground_occluder(sprite)
 
 	var game_object_paths: Dictionary = prefab_desc.get("game_object_paths", {})
 	for game_object_id_variant in instance_desc.get("game_object_overrides", {}).keys():
@@ -1343,7 +1961,7 @@ func _build_semantic_prefab_root(prefab: Dictionary, sprites: Dictionary, textur
 
 	if not Array(prefab.get("behavior_hints", [])).is_empty():
 		root_node.set_meta("cainos_behavior_hints", prefab.get("behavior_hints", []))
-	_apply_runtime_prefab_conventions(root_node, prefab)
+	_apply_runtime_prefab_conventions(root_node, prefab, sprites)
 
 	return root_node
 
@@ -1386,12 +2004,14 @@ func _apply_game_object_to_node(node: Node2D, node_desc: Dictionary, scene_root:
 		sprite_node.position = _sprite_top_left_offset(sprite_desc)
 		sprite_node.flip_h = bool(renderer.get("flip_x", false))
 		sprite_node.flip_v = bool(renderer.get("flip_y", false))
-		sprite_node.z_index = int(renderer.get("sorting_order", 0)) + _unity_local_z_z_index_offset(local_position.z)
+		sprite_node.modulate = renderer.get("color", Color(1.0, 1.0, 1.0, 1.0))
+		var sorting_layer_id := int(renderer.get("sorting_layer_id", 0))
+		var sorting_order := int(renderer.get("sorting_order", 0))
+		var local_z_offset := _unity_local_z_z_index_offset(local_position.z)
+		sprite_node.z_as_relative = false
+		sprite_node.z_index = _unity_effective_sprite_z(sorting_layer_id, sorting_order, local_position.z)
 		sprite_node.texture_filter = TEXTURE_FILTER_NEAREST
-		sprite_node.set_meta("cainos_base_z_index", int(sprite_node.z_index))
-		sprite_node.set_meta("cainos_source_sorting_order", int(renderer.get("sorting_order", 0)))
-		sprite_node.set_meta("cainos_unity_local_z_offset", _unity_local_z_z_index_offset(local_position.z))
-		sprite_node.set_meta("sorting_layer_id", int(renderer.get("sorting_layer_id", 0)))
+		_set_sprite_sorting_metadata(sprite_node, sorting_layer_id, sorting_order, local_z_offset)
 		sprite_node.set_meta("sprite_name", str(sprite_desc.get("name", "")))
 		node.add_child(sprite_node)
 
@@ -1498,11 +2118,18 @@ func _make_prefab_runtime_node(node_desc: Dictionary) -> Node2D:
 	return body
 
 
-func _apply_runtime_prefab_conventions(root_node: Node2D, prefab: Dictionary) -> void:
+func _apply_runtime_prefab_conventions(root_node: Node2D, prefab: Dictionary, sprites: Dictionary) -> void:
+	_apply_basic_foreground_occluder_conventions(root_node)
 	if _prefab_requires_runtime_actor_helper(prefab, root_node):
 		_attach_runtime_actor_helper(root_node)
+	if _prefab_has_behavior_kind(prefab, "top_down_character_controller"):
+		_attach_player_runtime(root_node, prefab, sprites)
 	if _prefab_has_behavior_kind(prefab, "stairs_layer_trigger"):
 		_attach_stairs_runtime(root_node, prefab)
+	if _prefab_has_behavior_kind(prefab, "sprite_color_animation"):
+		_attach_sprite_color_animation_runtime(root_node, prefab)
+	if _prefab_has_behavior_kind(prefab, "altar_trigger"):
+		_attach_altar_runtime(root_node, prefab)
 
 
 func _prefab_requires_runtime_actor_helper(prefab: Dictionary, root_node: Node2D) -> bool:
@@ -1530,6 +2157,100 @@ func _attach_runtime_actor_helper(root_node: Node2D) -> void:
 	root_node.set_meta("cainos_runtime_actor_helper", true)
 
 
+func _attach_player_runtime(root_node: Node2D, prefab: Dictionary, sprites: Dictionary) -> void:
+	var controller_hint := _first_behavior_hint(prefab, "top_down_character_controller")
+	if controller_hint.is_empty():
+		return
+	var visual_config := _player_runtime_visual_config(root_node, prefab, sprites)
+	if visual_config.is_empty():
+		return
+	root_node.set_script(CainosTopDownPlayerController2D)
+	var controller_data: Dictionary = controller_hint.get("data", {})
+	root_node.set("body_sprite_path", NodePath(str(visual_config.get("body_sprite_path", "PF Player Sprite"))))
+	root_node.set("shadow_sprite_path", NodePath(str(visual_config.get("shadow_sprite_path", "Shadow/Shadow Sprite"))))
+	root_node.set("actor_helper_path", NodePath("CainosRuntimeActor2D"))
+	root_node.set("move_speed_px", float(controller_data.get("speed", 3.0)) * DEFAULT_PPU)
+	root_node.set("south_rect", visual_config.get("south_rect", Rect2()))
+	root_node.set("north_rect", visual_config.get("north_rect", Rect2()))
+	root_node.set("side_rect", visual_config.get("side_rect", Rect2()))
+	root_node.set("shadow_rect", visual_config.get("shadow_rect", Rect2()))
+	root_node.set("direction_values", Dictionary(controller_data.get("direction_values", {
+		"south": 0,
+		"north": 1,
+		"east": 2,
+		"west": 3,
+	})).duplicate(true))
+	root_node.set_meta("cainos_player_runtime", true)
+
+
+func _player_runtime_visual_config(root_node: Node2D, prefab: Dictionary, sprites: Dictionary) -> Dictionary:
+	var body_sprite := root_node.get_node_or_null("PF Player Sprite") as Sprite2D
+	if body_sprite == null:
+		body_sprite = _first_sprite_descendant(root_node)
+	if body_sprite == null:
+		return {}
+	var shadow_sprite := root_node.get_node_or_null("Shadow/Shadow Sprite") as Sprite2D
+	var player_texture_guid := _player_texture_guid(prefab, sprites)
+	var south_rect: Rect2 = body_sprite.region_rect
+	var north_rect := south_rect
+	var side_rect := south_rect
+	if not player_texture_guid.is_empty():
+		var north_desc := _player_texture_sprite_desc(sprites, player_texture_guid, ["player b", " player b", " back"])
+		if not north_desc.is_empty():
+			north_rect = north_desc.get("rect", south_rect)
+		var side_desc := _player_texture_sprite_desc(sprites, player_texture_guid, ["player s", " player s", " side"])
+		if not side_desc.is_empty():
+			side_rect = side_desc.get("rect", south_rect)
+	var shadow_rect := shadow_sprite.region_rect if shadow_sprite != null else Rect2()
+	if shadow_rect.size == Vector2.ZERO and not player_texture_guid.is_empty():
+		var shadow_desc := _player_texture_sprite_desc(sprites, player_texture_guid, ["shadow player", "player shadow"])
+		if not shadow_desc.is_empty():
+			shadow_rect = shadow_desc.get("rect", Rect2())
+	return {
+		"body_sprite_path": root_node.get_path_to(body_sprite),
+		"shadow_sprite_path": root_node.get_path_to(shadow_sprite) if shadow_sprite != null else NodePath("Shadow/Shadow Sprite"),
+		"south_rect": south_rect,
+		"north_rect": north_rect,
+		"side_rect": side_rect,
+		"shadow_rect": shadow_rect,
+	}
+
+
+func _player_texture_guid(prefab: Dictionary, sprites: Dictionary) -> String:
+	var nodes: Dictionary = prefab.get("nodes", {})
+	for node_desc_variant in nodes.values():
+		var node_desc: Dictionary = node_desc_variant
+		for renderer_variant in node_desc.get("sprite_renderers", []):
+			var renderer: Dictionary = renderer_variant
+			var sprite_key := "%s:%s" % [str(renderer.get("sprite_guid", "")), str(renderer.get("sprite_file_id", ""))]
+			if sprites.has(sprite_key):
+				return str(Dictionary(sprites[sprite_key]).get("texture_guid", ""))
+	return ""
+
+
+func _player_texture_sprite_desc(sprites: Dictionary, texture_guid: String, name_markers: Array[String]) -> Dictionary:
+	for sprite_variant in sprites.values():
+		var sprite_desc: Dictionary = sprite_variant
+		if str(sprite_desc.get("texture_guid", "")) != texture_guid:
+			continue
+		var sprite_name := str(sprite_desc.get("name", "")).to_lower()
+		for marker_variant in name_markers:
+			var marker := str(marker_variant)
+			if sprite_name.contains(marker):
+				return sprite_desc
+	return {}
+
+
+func _first_sprite_descendant(node: Node) -> Sprite2D:
+	if node is Sprite2D:
+		return node as Sprite2D
+	for child in node.get_children():
+		var sprite := _first_sprite_descendant(child)
+		if sprite != null:
+			return sprite
+	return null
+
+
 func _attach_stairs_runtime(root_node: Node2D, prefab: Dictionary) -> void:
 	var stairs_hint := _first_behavior_hint(prefab, "stairs_layer_trigger")
 	if stairs_hint.is_empty():
@@ -1548,6 +2269,39 @@ func _attach_stairs_runtime(root_node: Node2D, prefab: Dictionary) -> void:
 	trigger_node.set_meta("cainos_stairs_runtime", true)
 	root_node.set_meta("cainos_stairs_runtime", true)
 	_apply_stairs_visual_strata(root_node, str(data.get("direction", "south")))
+
+
+func _attach_sprite_color_animation_runtime(root_node: Node2D, prefab: Dictionary) -> void:
+	for hint_variant in prefab.get("behavior_hints", []):
+		var hint: Dictionary = hint_variant
+		if str(hint.get("kind", "")) != "sprite_color_animation":
+			continue
+		var target_node := _resolve_scene_node_path(root_node, str(hint.get("scene_node_path", "")))
+		if not (target_node is Node2D):
+			continue
+		var animation_node := target_node as Node2D
+		animation_node.set_script(CainosSpriteColorAnimation2D)
+		var data: Dictionary = hint.get("data", {})
+		animation_node.set("duration_seconds", float(data.get("duration_seconds", 0.0)))
+		animation_node.set("gradient_mode", str(data.get("gradient_mode", "blend")))
+		animation_node.set("color_keys", Array(data.get("color_keys", [])))
+		animation_node.set("alpha_keys", Array(data.get("alpha_keys", [])))
+		animation_node.set_meta("cainos_sprite_color_animation_runtime", true)
+
+
+func _attach_altar_runtime(root_node: Node2D, prefab: Dictionary) -> void:
+	var altar_hint := _first_behavior_hint(prefab, "altar_trigger")
+	if altar_hint.is_empty():
+		return
+	root_node.set_script(CainosAltarTrigger2D)
+	var data: Dictionary = altar_hint.get("data", {})
+	var rune_node_paths: Array[NodePath] = []
+	for path_variant in data.get("rune_node_paths", []):
+		rune_node_paths.append(NodePath(str(path_variant)))
+	root_node.set("trigger_area_path", NodePath("BoxCollider_0"))
+	root_node.set("rune_node_paths", rune_node_paths)
+	root_node.set("lerp_speed", float(data.get("lerp_speed", 0.0)))
+	root_node.set_meta("cainos_altar_runtime", true)
 
 
 func _first_behavior_hint(prefab: Dictionary, expected_kind: String) -> Dictionary:
@@ -1599,8 +2353,58 @@ func _set_visual_stratum(node: Node, stratum: String, z_offset: int) -> void:
 		sprite.set_meta("cainos_visual_stratum", stratum)
 		sprite.set_meta("cainos_visual_stratum_offset", z_offset)
 		sprite.z_index = int(sprite.get_meta("cainos_base_z_index")) + z_offset
+		sprite.set_meta("cainos_effective_z_index", int(sprite.z_index))
 	for child in node.get_children():
 		_set_visual_stratum(child, stratum, z_offset)
+
+
+func _apply_basic_foreground_occluder_conventions(node: Node) -> void:
+	if node is Sprite2D:
+		_refresh_basic_foreground_occluder(node as Sprite2D)
+	for child in node.get_children():
+		_apply_basic_foreground_occluder_conventions(child)
+
+
+func _refresh_basic_foreground_occluder(sprite: Sprite2D) -> void:
+	if not _is_basic_foreground_occluder_sprite(sprite):
+		if sprite.has_meta("cainos_foreground_occluder"):
+			sprite.remove_meta("cainos_foreground_occluder")
+		if sprite.has_meta("cainos_foreground_occluder_offset"):
+			sprite.remove_meta("cainos_foreground_occluder_offset")
+		return
+	if not sprite.has_meta("cainos_base_z_index"):
+		sprite.set_meta("cainos_base_z_index", int(sprite.z_index))
+	var base_z := int(sprite.get_meta("cainos_base_z_index"))
+	sprite.set_meta("cainos_foreground_occluder", true)
+	sprite.set_meta("cainos_foreground_occluder_offset", FOREGROUND_OCCLUDER_Z_OFFSET)
+	sprite.set_meta("cainos_visual_stratum", "foreground_occluder")
+	sprite.set_meta("cainos_visual_stratum_offset", FOREGROUND_OCCLUDER_Z_OFFSET)
+	sprite.z_index = base_z + FOREGROUND_OCCLUDER_Z_OFFSET
+	sprite.set_meta("cainos_effective_z_index", int(sprite.z_index))
+
+
+func _is_basic_foreground_occluder_sprite(sprite: Sprite2D) -> bool:
+	var effective_layer := str(sprite.get_meta("cainos_effective_sorting_layer_name", ""))
+	var source_prefab_path := _nearest_meta_string(sprite, "unity_source_prefab").to_lower()
+	if source_prefab_path.is_empty():
+		source_prefab_path = _nearest_meta_string(sprite, "unity_path").to_lower()
+	var labels := [
+		str(sprite.name).to_lower(),
+		str(sprite.get_meta("sprite_name", "")).to_lower(),
+	]
+	if sprite.get_parent() != null:
+		labels.append(str(sprite.get_parent().name).to_lower())
+	for label_variant in labels:
+		var label := str(label_variant)
+		if effective_layer == "Layer 2" and label.contains("upper"):
+			return true
+		if effective_layer == "Layer 2" and (label.contains("bridge gate t") or label.contains("gate t")):
+			return true
+		if source_prefab_path.contains("struct - gate") and (label.contains("bridge gate b") or label.contains("gate b")):
+			return true
+		if source_prefab_path.contains("wooden gate"):
+			return true
+	return false
 
 
 func _has_descendant_sprite(node: Node) -> bool:
@@ -1795,6 +2599,20 @@ func _generate_preview_scene(generated_tilesets: Dictionary, copied_res_paths: D
 		helper_paths.append(runtime_demo.get("path", ""))
 		helper_entries.append(runtime_demo.get("catalog_entry", {}))
 
+	var altar_rune_demo := _build_runtime_altar_runes_demo_scene(generated_tilesets, semantic_registry, copied_res_paths)
+	if not altar_rune_demo.get("ok", false):
+		return altar_rune_demo
+	if altar_rune_demo.get("generated", false):
+		helper_paths.append(altar_rune_demo.get("path", ""))
+		helper_entries.append(altar_rune_demo.get("catalog_entry", {}))
+
+	var player_demo := _build_runtime_player_demo_scene(generated_tilesets, semantic_registry, copied_res_paths)
+	if not player_demo.get("ok", false):
+		return player_demo
+	if player_demo.get("generated", false):
+		helper_paths.append(player_demo.get("path", ""))
+		helper_entries.append(player_demo.get("catalog_entry", {}))
+
 	return {
 		"ok": true,
 		"paths": helper_paths,
@@ -1942,12 +2760,6 @@ func _build_runtime_stairs_demo_scene(generated_tilesets: Dictionary, semantic_r
 		var stone := _make_tile_layer("StonePaths", stone_tileset, -1)
 		_fill_runtime_demo_stone(stone)
 		root.add_child(stone)
-
-	var controller := Node.new()
-	controller.name = "DemoController"
-	controller.set_script(CainosStairsDemoController)
-	controller.set("movement_speed", 160.0)
-	controller.set("movement_bounds", Rect2(Vector2(80, 112), Vector2(528, 224)))
 	var walkable_regions: Array[Rect2] = [
 		Rect2(Vector2(96, 272), Vector2(152, 72)),
 		Rect2(Vector2(236, 232), Vector2(44, 120)),
@@ -1955,8 +2767,6 @@ func _build_runtime_stairs_demo_scene(generated_tilesets: Dictionary, semantic_r
 		Rect2(Vector2(500, 160), Vector2(80, 112)),
 		Rect2(Vector2(580, 160), Vector2(60, 64)),
 	]
-	controller.set("walkable_regions", walkable_regions)
-	root.add_child(controller)
 
 	_instantiate_first_semantic_prefab(root, semantic_preview, "plants", Vector2(96, 176))
 	if not altar_prefab.is_empty():
@@ -1973,17 +2783,12 @@ func _build_runtime_stairs_demo_scene(generated_tilesets: Dictionary, semantic_r
 		return {"ok": false, "error": "Could not instantiate runtime stairs demo player."}
 	var player_node := root.get_node_or_null("PF Player")
 	if player_node != null:
-		controller.set("actor_path", NodePath("../PF Player"))
-		var camera := Camera2D.new()
-		camera.name = "FollowCamera2D"
-		camera.enabled = true
-		camera.position = Vector2(0, -48)
-		camera.zoom = Vector2(1.0, 1.0)
-		camera.limit_left = 0
-		camera.limit_top = 0
-		camera.limit_right = 640
-		camera.limit_bottom = 384
-		player_node.add_child(camera)
+		_configure_runtime_demo_player(
+			player_node,
+			Rect2(Vector2(80, 112), Vector2(528, 224)),
+			walkable_regions,
+			Rect2i(0, 0, 640, 384)
+		)
 
 	var hud := CanvasLayer.new()
 	hud.name = "HUD"
@@ -2012,7 +2817,176 @@ func _build_runtime_stairs_demo_scene(generated_tilesets: Dictionary, semantic_r
 			"name": "basic_runtime_stairs_demo",
 			"path": scene_path,
 		},
+}
+
+
+func _build_runtime_altar_runes_demo_scene(generated_tilesets: Dictionary, semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+	var semantic_preview := _build_semantic_preview_lookup(semantic_registry, copied_res_paths)
+	var player_prefab := _find_semantic_prefab_by_name(semantic_preview, "player", "PF Player")
+	var altar_prefab := _find_semantic_prefab_by_name(semantic_preview, "props", "PF Props - Altar 01")
+	var rune_x2_prefab := _find_semantic_prefab_by_name(semantic_preview, "props", "PF Props - Rune Pillar X2")
+	var rune_x3_prefab := _find_semantic_prefab_by_name(semantic_preview, "props", "PF Props - Rune Pillar X3")
+	if player_prefab.is_empty() or altar_prefab.is_empty() or (rune_x2_prefab.is_empty() and rune_x3_prefab.is_empty()):
+		return {"ok": true, "generated": false}
+
+	var root := Node2D.new()
+	root.name = "basic_runtime_altar_runes_demo"
+
+	var grass_tileset := generated_tilesets.get("tileset_grass") as TileSet
+	if grass_tileset != null:
+		var grass := _make_tile_layer("Grass", grass_tileset, -2)
+		_paint_tile_rect(grass, Rect2i(0, 0, 20, 12), Vector2i.ZERO)
+		root.add_child(grass)
+	var stone_tileset := generated_tilesets.get("tileset_stone_ground") as TileSet
+	if stone_tileset != null:
+		var stone := _make_tile_layer("StonePad", stone_tileset, -1)
+		_paint_tile_rect(stone, Rect2i(7, 3, 6, 6), Vector2i.ZERO)
+		_paint_tile_rect(stone, Rect2i(8, 2, 4, 1), Vector2i.ZERO)
+		_paint_tile_rect(stone, Rect2i(8, 9, 4, 1), Vector2i.ZERO)
+		root.add_child(stone)
+
+	_instantiate_specific_semantic_prefab(root, semantic_preview, altar_prefab, Vector2(320, 208))
+	if not rune_x2_prefab.is_empty():
+		_instantiate_specific_semantic_prefab(root, semantic_preview, rune_x2_prefab, Vector2(248, 200))
+	if not rune_x3_prefab.is_empty():
+		_instantiate_specific_semantic_prefab(root, semantic_preview, rune_x3_prefab, Vector2(392, 200))
+	var player_instance := _instantiate_specific_semantic_prefab(root, semantic_preview, player_prefab, Vector2(320, 320))
+	if not player_instance:
+		root.free()
+		return {"ok": false, "error": "Could not instantiate altar/runes demo player."}
+	var player_node := root.get_node_or_null("PF Player")
+	if player_node != null:
+		_configure_runtime_demo_player(
+			player_node,
+			Rect2(Vector2(80, 80), Vector2(480, 256)),
+			[],
+			Rect2i(0, 0, 640, 384)
+		)
+
+	var hud := CanvasLayer.new()
+	hud.name = "HUD"
+	root.add_child(hud)
+	var help_label := Label.new()
+	help_label.name = "Instructions"
+	help_label.position = Vector2(16, 16)
+	help_label.text = "Move: WASD or arrow keys\nWalk into the altar to light the runes.\nRune pillars should animate continuously."
+	hud.add_child(help_label)
+	_assign_scene_owner(root, root)
+
+	var packed := PackedScene.new()
+	if packed.pack(root) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack altar/runes runtime demo scene."}
+	var scene_path := _active_output_root.path_join("scenes/helpers/basic_runtime_altar_runes_demo.tscn")
+	if _save_resource(packed, scene_path) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save altar/runes runtime demo scene."}
+	root.free()
+	return {
+		"ok": true,
+		"generated": true,
+		"path": scene_path,
+		"catalog_entry": {
+			"name": "basic_runtime_altar_runes_demo",
+			"path": scene_path,
+		},
 	}
+
+
+func _build_runtime_player_demo_scene(generated_tilesets: Dictionary, semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
+	var semantic_preview := _build_semantic_preview_lookup(semantic_registry, copied_res_paths)
+	var player_prefab := _find_semantic_prefab_by_name(semantic_preview, "player", "PF Player")
+	if player_prefab.is_empty():
+		return {"ok": true, "generated": false}
+
+	var root := Node2D.new()
+	root.name = "basic_runtime_player_demo"
+
+	var grass_tileset := generated_tilesets.get("tileset_grass") as TileSet
+	if grass_tileset != null:
+		var grass := _make_tile_layer("Grass", grass_tileset, -2)
+		_paint_tile_rect(grass, Rect2i(0, 0, 18, 12), Vector2i.ZERO)
+		root.add_child(grass)
+	var stone_tileset := generated_tilesets.get("tileset_stone_ground") as TileSet
+	if stone_tileset != null:
+		var stone := _make_tile_layer("StonePath", stone_tileset, -1)
+		_paint_tile_rect(stone, Rect2i(4, 5, 10, 2), Vector2i.ZERO)
+		_paint_tile_rect(stone, Rect2i(8, 3, 2, 6), Vector2i.ZERO)
+		root.add_child(stone)
+
+	_instantiate_first_semantic_prefab(root, semantic_preview, "plants", Vector2(160, 176))
+	_instantiate_first_semantic_prefab(root, semantic_preview, "props", Vector2(432, 176))
+	var player_instance := _instantiate_specific_semantic_prefab(root, semantic_preview, player_prefab, Vector2(288, 224))
+	if not player_instance:
+		root.free()
+		return {"ok": false, "error": "Could not instantiate runtime player demo player."}
+	var player_node := root.get_node_or_null("PF Player")
+	if player_node != null:
+		_configure_runtime_demo_player(
+			player_node,
+			Rect2(Vector2(96, 96), Vector2(384, 192)),
+			[],
+			Rect2i(0, 0, 576, 384)
+		)
+
+	var hud := CanvasLayer.new()
+	hud.name = "HUD"
+	root.add_child(hud)
+	var help_label := Label.new()
+	help_label.name = "Instructions"
+	help_label.position = Vector2(16, 16)
+	help_label.text = "Move: WASD or arrow keys\nThe player controller should update facing immediately.\nUse this scene to verify player movement and camera follow."
+	hud.add_child(help_label)
+	_assign_scene_owner(root, root)
+
+	var packed := PackedScene.new()
+	if packed.pack(root) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not pack runtime player demo scene."}
+	var scene_path := _active_output_root.path_join("scenes/helpers/basic_runtime_player_demo.tscn")
+	if _save_resource(packed, scene_path) != OK:
+		root.free()
+		return {"ok": false, "error": "Could not save runtime player demo scene."}
+	root.free()
+	return {
+		"ok": true,
+		"generated": true,
+		"path": scene_path,
+		"catalog_entry": {
+			"name": "basic_runtime_player_demo",
+			"path": scene_path,
+		},
+	}
+
+
+func _configure_runtime_demo_player(player_node: Node, movement_bounds: Rect2, walkable_regions: Array[Rect2], camera_limits: Rect2i, camera_offset: Vector2 = Vector2(0, -48)) -> void:
+	if not (player_node is Node2D):
+		return
+	if _node_script_path(player_node).ends_with("cainos_top_down_player_controller_2d.gd"):
+		player_node.set("movement_bounds", movement_bounds)
+		player_node.set("walkable_regions", walkable_regions.duplicate())
+		player_node.call("apply_facing", "south", false)
+	var camera := player_node.get_node_or_null("FollowCamera2D") as Camera2D
+	if camera == null:
+		camera = Camera2D.new()
+		camera.name = "FollowCamera2D"
+		player_node.add_child(camera)
+	camera.enabled = true
+	camera.position = camera_offset
+	camera.zoom = Vector2(1.0, 1.0)
+	camera.limit_left = camera_limits.position.x
+	camera.limit_top = camera_limits.position.y
+	camera.limit_right = camera_limits.position.x + camera_limits.size.x
+	camera.limit_bottom = camera_limits.position.y + camera_limits.size.y
+
+
+func _node_script_path(node: Node) -> String:
+	if node == null:
+		return ""
+	var script = node.get_script()
+	if script == null:
+		return ""
+	return str(script.resource_path)
 
 
 func _build_semantic_preview_lookup(semantic_registry: Dictionary, copied_res_paths: Dictionary) -> Dictionary:
@@ -2133,23 +3107,41 @@ func _make_tile_layer(name: String, tileset: TileSet, z_index: int) -> TileMapLa
 
 
 func _unity_scene_layer_base_z(layer_name: String) -> int:
-	match layer_name:
-		"Layer 3":
-			return 200
-		"Layer 2":
-			return 100
-		_:
-			return 0
+	return int(UNITY_SORTING_LAYER_BASE_Z.get(layer_name, 0))
 
 
 func _unity_sorting_layer_name(sorting_layer_id: int) -> String:
-	match sorting_layer_id:
-		-105541197:
-			return "Layer 3"
-		-44025399:
-			return "Layer 2"
-		_:
-			return "Layer 1"
+	return str(UNITY_SORTING_LAYER_IDS.get(sorting_layer_id, "Layer 1"))
+
+
+func _unity_sorting_layer_base_z_from_id(sorting_layer_id: int) -> int:
+	return _unity_scene_layer_base_z(_unity_sorting_layer_name(sorting_layer_id))
+
+
+func _unity_effective_sprite_z(sorting_layer_id: int, sorting_order: int, local_z: float) -> int:
+	return _unity_effective_sprite_z_from_parts(
+		_unity_sorting_layer_name(sorting_layer_id),
+		sorting_order,
+		_unity_local_z_z_index_offset(local_z)
+	)
+
+
+func _unity_effective_sprite_z_from_parts(sorting_layer_name: String, sorting_order: int, local_z_offset: int) -> int:
+	return _unity_scene_layer_base_z(sorting_layer_name) + sorting_order + local_z_offset
+
+
+func _set_sprite_sorting_metadata(sprite: Sprite2D, sorting_layer_id: int, sorting_order: int, local_z_offset: int) -> void:
+	var sorting_layer_name := _unity_sorting_layer_name(sorting_layer_id)
+	var sorting_layer_base_z := _unity_scene_layer_base_z(sorting_layer_name)
+	var effective_z := _unity_effective_sprite_z_from_parts(sorting_layer_name, sorting_order, local_z_offset)
+	sprite.set_meta("sorting_layer_id", sorting_layer_id)
+	sprite.set_meta("cainos_source_sorting_order", sorting_order)
+	sprite.set_meta("cainos_unity_local_z_offset", local_z_offset)
+	sprite.set_meta("cainos_base_z_index", effective_z)
+	sprite.set_meta("cainos_effective_sorting_layer_name", sorting_layer_name)
+	sprite.set_meta("cainos_effective_sorting_layer_base_z", sorting_layer_base_z)
+	sprite.set_meta("cainos_effective_sorting_order", sorting_order)
+	sprite.set_meta("cainos_effective_z_index", effective_z)
 
 
 func _unity_scene_tile_layer_display_name(tilemap: Dictionary, source_key: String) -> String:
@@ -2362,12 +3354,15 @@ func _compatibility_markdown(compatibility_report: Dictionary) -> String:
 			var output_path_text := "(not generated)" if output_scene_path == null else str(output_scene_path)
 			var preview_scene_path = entry.get("preview_scene_path", null)
 			var preview_path_text := "(no preview)" if preview_scene_path == null else str(preview_scene_path)
+			var runtime_scene_path = entry.get("runtime_scene_path", null)
+			var runtime_path_text := "(no runtime scene)" if runtime_scene_path == null or str(runtime_scene_path).is_empty() else str(runtime_scene_path)
 			var reference_image_path := str(entry.get("reference_image_path", ""))
-			lines.append("- %s [%s] -> %s | preview: %s | prefabs: %s | tile layers: %s | skipped tile cells: %s%s | next: %s" % [
+			lines.append("- %s [%s] -> raw: %s | preview: %s | runtime: %s | prefabs: %s | tile layers: %s | skipped tile cells: %s%s | next: %s" % [
 				entry.get("scene_name", ""),
 				entry.get("status", ""),
 				output_path_text,
 				preview_path_text,
+				runtime_path_text,
 				entry.get("placed_prefab_count", 0),
 				entry.get("tile_layer_count", 0),
 				entry.get("skipped_tile_cell_count", 0),
@@ -2410,12 +3405,14 @@ func _catalog_markdown(catalog: Dictionary) -> String:
 	for scene_variant in catalog.get("imported_scenes", []):
 		var scene: Dictionary = scene_variant
 		var preview_scene_path := str(scene.get("preview_scene_path", ""))
+		var runtime_scene_path := str(scene.get("runtime_scene_path", ""))
 		var reference_image_path := str(scene.get("reference_image_path", ""))
-		lines.append("- %s [%s]: raw=%s | preview=%s%s" % [
+		lines.append("- %s [%s]: raw=%s | preview=%s | runtime=%s%s" % [
 			scene.get("name", ""),
 			scene.get("origin", ""),
 			scene.get("path", ""),
 			"(none)" if preview_scene_path.is_empty() else preview_scene_path,
+			"(none)" if runtime_scene_path.is_empty() else runtime_scene_path,
 			"" if reference_image_path.is_empty() else " | reference=%s" % reference_image_path,
 		])
 	lines.append("")

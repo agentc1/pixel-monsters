@@ -40,7 +40,8 @@ Check in the Scene dock:
 
 Check in the Inspector:
 - the root still has `cainos_behavior_hints`
-- the player scene is still manual for controller logic, but now carries the runtime actor helper for stairs/layer switching
+- the root script is `cainos_top_down_player_controller_2d.gd`
+- the player scene carries both the imported controller and `CainosRuntimeActor2D`
 
 ## 3. Run the demo scene
 
@@ -68,8 +69,8 @@ Open:
 Confirm:
 - all south/east/west stair prefabs appear under `Supported Static Prefabs`
 - stair entries include `stairs_runtime_imported`
-- `PF Player` remains under `Manual Behavior Prefabs`
-- `PF Player` also includes `runtime_actor_helper_attached`
+- `PF Player` appears under `Supported Static Prefabs`
+- `PF Player` includes both `player_controller_runtime_imported` and `runtime_actor_helper_attached`
 
 ## If it fails
 

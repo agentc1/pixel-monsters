@@ -290,6 +290,7 @@ func _serialize_node(node: Node) -> Dictionary:
 	if node is CanvasItem:
 		var item := node as CanvasItem
 		payload["visible"] = item.visible
+		payload["modulate"] = _jsonify_variant(item.modulate)
 	if node is Node2D:
 		var node_2d := node as Node2D
 		payload["position"] = _vector_payload(node_2d.position)

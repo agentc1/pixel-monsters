@@ -31,6 +31,7 @@ GUIDS = {
     "controller_script": "adadadadadadadadadadadadadadadad",
     "prefab_bush": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "prefab_lantern": "cccccccccccccccccccccccccccccccc",
+    "prefab_sorting_stack": "67676767676767676767676767676767",
     "prefab_edge": "dddddddddddddddddddddddddddddddd",
     "prefab_complex_edge": "abcdabcdabcdabcdabcdabcdabcdabcd",
     "prefab_stairs": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -51,6 +52,7 @@ GUIDS = {
 
 SPRITES = {
     "grass_tile": {"name": "TX Grass Tile 01", "file_id": "6100000000000000101", "rect": (0, 0, 32, 32), "pivot": (0.5, 0.5)},
+    "wall_tile": {"name": "TX Wall Tile 01", "file_id": "6100000000000000103", "rect": (0, 0, 32, 32), "pivot": (0.5, 0.5)},
     "bush": {"name": "TX Bush T1", "file_id": "6100000000000000001", "rect": (0, 0, 22, 19), "pivot": (0.5, 0.5)},
     "shadow_tile": {"name": "TX Shadow Tile 01", "file_id": "6100000000000000102", "rect": (0, 0, 32, 32), "pivot": (0.5, 0.5)},
     "shadow_bush": {"name": "TX Shadow Bush T1", "file_id": "6100000000000000002", "rect": (0, 0, 22, 12), "pivot": (0.5, 0.5)},
@@ -58,7 +60,10 @@ SPRITES = {
     "shadow_lantern": {"name": "TX Shadow Lantern", "file_id": "6100000000000000004", "rect": (0, 0, 22, 10), "pivot": (0.5, 0.5)},
     "stairs": {"name": "TX Struct Stairs L", "file_id": "6100000000000000005", "rect": (0, 0, 32, 32), "pivot": (0.5, 0.5)},
     "edge": {"name": "TX Struct Edge", "file_id": "-6100000000000000006", "rect": (32, 0, 32, 16), "pivot": (0.5, 0.5)},
-    "player": {"name": "TX Player Idle", "file_id": "6100000000000000007", "rect": (0, 24, 24, 32), "pivot": (0.5, 0.0)},
+    "player": {"name": "TX Player F", "file_id": "6100000000000000007", "rect": (0, 24, 24, 32), "pivot": (0.5, 0.0)},
+    "player_back": {"name": "TX Player B", "file_id": "6100000000000000013", "rect": (24, 24, 24, 32), "pivot": (0.5, 0.0)},
+    "player_side": {"name": "TX Player S", "file_id": "6100000000000000014", "rect": (48, 24, 24, 32), "pivot": (0.5, 0.0)},
+    "player_shadow": {"name": "TX Shadow Player", "file_id": "6100000000000000015", "rect": (72, 32, 24, 12), "pivot": (0.5, 0.5)},
     "polygon_prop": {"name": "TX Props Polygon", "file_id": "6100000000000000008", "rect": (32, 0, 24, 24), "pivot": (0.5, 0.5)},
     "altar": {"name": "TX Props Altar", "file_id": "6100000000000000009", "rect": (64, 0, 32, 32), "pivot": (0.5, 0.5)},
     "altar_rune": {"name": "TX Props Altar Rune", "file_id": "6100000000000000010", "rect": (96, 0, 8, 8), "pivot": (0.5, 0.5)},
@@ -92,20 +97,24 @@ def main() -> None:
         "extracted_a": str(extracted_a),
         "extracted_b": str(extracted_b),
         "expected": {
-            "prefab_count": 14,
-            "supported_static_prefabs": 7,
+            "prefab_count": 15,
+            "supported_static_prefabs": 11,
             "approximated_prefabs": 3,
-            "manual_behavior_prefabs": 3,
+            "manual_behavior_prefabs": 0,
             "unresolved_or_skipped_prefabs": 1,
             "editor_only_prefabs": 1,
-            "imported_scenes": 1,
-            "deferred_scenes": 1,
-            "scene_tile_layers": 2,
-            "scene_prefab_instances": 1,
+            "imported_scenes": 2,
+            "deferred_scenes": 0,
+            "scene_tile_layers": 4,
+            "scene_prefab_instances": 2,
             "scene_skipped_tile_cells": 1,
+            "all_props_tile_layers": 2,
+            "all_props_prefab_instances": 1,
+            "all_props_skipped_tile_cells": 0,
             "sample_prefabs": {
                 "bush": "PF Plant - Bush 01",
                 "lantern": "PF Props - Stone Lantern 01",
+                "sorting_stack": "PF Props - Z Sorting Stack 01",
                 "stairs": "PF Struct - Stairs S 01 L",
                 "altar": "PF Props - Altar 01",
                 "rune": "PF Props - Rune Pillar X2",
@@ -122,9 +131,14 @@ def main() -> None:
             },
             "sample_scene": {
                 "imported": "SC Demo",
-                "deferred": "SC All Props",
+                "runtime": "SC Demo Runtime",
                 "player_instance": "PF Player",
-                "tile_layers": ["Layer 1 - Grass", "Layer 1 - Wall Shadow"],
+                "tile_layers": ["Layer 1 - Grass", "Layer 1 - Wall", "Layer 1 - Wall Shadow", "Layer 2 - Wall"],
+            },
+            "sample_scene_all_props": {
+                "imported": "SC All Props",
+                "tile_layers": ["Layer 1 - Grass", "Layer 1 - Wall"],
+                "prefab_instance": "PF Props - Stone Lantern 01",
             },
             "lantern_box_size": [16.0, 24.0],
             "edge_segment": {"a": [-16.0, 0.0], "b": [16.0, 0.0]},
@@ -143,7 +157,12 @@ def main() -> None:
                 "gravity_scale": 0.0,
                 "freeze_rotation": True,
             },
-            "player_region_rect": [0.0, 8.0, 24.0, 32.0],
+            "player_rects": {
+                "south": [0.0, 8.0, 24.0, 32.0],
+                "north": [24.0, 8.0, 24.0, 32.0],
+                "side": [48.0, 8.0, 24.0, 32.0],
+                "shadow": [72.0, 20.0, 24.0, 12.0],
+            },
         },
     }
     (root / "fixture_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -192,7 +211,7 @@ def build_asset_map():
             (0, 32, 31, 63, (132, 111, 90, 255)),
             (32, 32, 63, 63, (120, 102, 82, 255)),
         ],
-        [],
+        [SPRITES["wall_tile"]],
     )
     add_texture(
         assets,
@@ -238,10 +257,15 @@ def build_asset_map():
         assets,
         "player",
         f"{TEXTURE_ROOT}/TX Player.png",
+        128,
         64,
-        64,
-        [(0, 8, 23, 39, (77, 120, 204, 255))],
-        [SPRITES["player"]],
+        [
+            (0, 8, 23, 39, (77, 120, 204, 255)),
+            (24, 8, 47, 39, (64, 102, 176, 255)),
+            (48, 8, 71, 39, (89, 136, 204, 255)),
+            (72, 20, 95, 31, (32, 20, 16, 180)),
+        ],
+        [SPRITES["player"], SPRITES["player_back"], SPRITES["player_side"], SPRITES["player_shadow"]],
     )
     add_texture(
         assets,
@@ -293,6 +317,7 @@ def build_asset_map():
 
     add_prefab(assets, GUIDS["prefab_bush"], f"{PREFAB_ROOT}/Plant/PF Plant - Bush 01.prefab", bush_prefab())
     add_prefab(assets, GUIDS["prefab_lantern"], f"{PREFAB_ROOT}/Props/PF Props - Stone Lantern 01.prefab", lantern_prefab())
+    add_prefab(assets, GUIDS["prefab_sorting_stack"], f"{PREFAB_ROOT}/Props/PF Props - Z Sorting Stack 01.prefab", sorting_stack_prefab())
     add_prefab(assets, GUIDS["prefab_edge"], f"{PREFAB_ROOT}/Struct/PF Struct - Z Edge 01.prefab", edge_prefab())
     add_prefab(assets, GUIDS["prefab_complex_edge"], f"{PREFAB_ROOT}/Struct/PF Struct - Z Edge Complex 01.prefab", complex_edge_prefab())
     add_prefab(assets, GUIDS["prefab_stairs"], f"{PREFAB_ROOT}/Struct/PF Struct - Stairs S 01 L.prefab", stairs_prefab())
@@ -315,7 +340,7 @@ def build_asset_map():
         SPRITES["grass_tile"]["file_id"],
     )
     add_scene(assets, GUIDS["scene_demo"], f"{PACK_ROOT}/Scene/SC Demo.unity", demo_scene())
-    add_scene(assets, GUIDS["scene_all_props"], f"{PACK_ROOT}/Scene/SC All Props.unity", "Scene:\n")
+    add_scene(assets, GUIDS["scene_all_props"], f"{PACK_ROOT}/Scene/SC All Props.unity", all_props_scene())
     return assets
 
 
@@ -425,6 +450,35 @@ def lantern_prefab():
     ) + "\n"
 
 
+def sorting_stack_prefab():
+    return "\n".join(
+        [
+            game_object_doc("250100", "PF Props - Z Sorting Stack 01", ["250101"]),
+            transform_doc("250101", "250100", "0", ["250111", "250121"], (0.0, 0.0, 0.0)),
+            game_object_doc("250110", "Layer 1 Visual", ["250111", "250112"]),
+            transform_doc("250111", "250110", "250101", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc(
+                "250112",
+                "250110",
+                GUIDS["props"],
+                SPRITES["lantern"]["file_id"],
+                sorting_layer_id=-1869315837,
+                sorting_order=2,
+            ),
+            game_object_doc("250120", "Upper", ["250121", "250122"]),
+            transform_doc("250121", "250120", "250101", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc(
+                "250122",
+                "250120",
+                GUIDS["props"],
+                SPRITES["polygon_prop"]["file_id"],
+                sorting_layer_id=-44025399,
+                sorting_order=0,
+            ),
+        ]
+    ) + "\n"
+
+
 def edge_prefab():
     return "\n".join(
         [
@@ -488,11 +542,11 @@ def altar_prefab():
             ),
             game_object_doc("450110", "Rune A", ["450111", "450112"]),
             transform_doc("450111", "450110", "450101", [], (-0.25, 0.25, 0.0)),
-            sprite_renderer_doc("450112", "450110", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2),
+            sprite_renderer_doc("450112", "450110", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2, color=(0.0, 0.8, 1.0, 0.0)),
             game_object_doc("450120", "Rune B", ["450121", "450122"]),
             transform_doc("450121", "450120", "450101", [], (0.25, 0.25, 0.0)),
-            sprite_renderer_doc("450122", "450120", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2),
-            box_collider_doc("450130", "450100", (0.0, 0.0), (0.75, 0.5)),
+            sprite_renderer_doc("450122", "450120", GUIDS["props"], SPRITES["altar_rune"]["file_id"], sorting_order=2, color=(0.0, 0.8, 1.0, 0.0)),
+            box_collider_doc("450130", "450100", (0.0, 0.0), (0.75, 0.5), is_trigger=True),
         ]
     ) + "\n"
 
@@ -604,7 +658,7 @@ def player_prefab():
     return "\n".join(
         [
             game_object_doc("700100", "PF Player", ["700101", "700102", "700103", "700104", "700105", "700106"]),
-            transform_doc("700101", "700100", "0", [], (0.0, 0.0, 0.0)),
+            transform_doc("700101", "700100", "0", ["700111"], (0.0, 0.0, 0.0)),
             sprite_renderer_doc("700102", "700100", GUIDS["player"], SPRITES["player"]["file_id"], sorting_order=0),
             box_collider_doc("700103", "700100", (0.0, -0.25), (0.5, 0.75)),
             rigidbody2d_doc("700104", "700100"),
@@ -617,6 +671,9 @@ def player_prefab():
                     "  speed: 3",
                 ],
             ),
+            game_object_doc("700110", "Shadow", ["700111", "700112"]),
+            transform_doc("700111", "700110", "700101", [], (0.0, 0.0, 0.0)),
+            sprite_renderer_doc("700112", "700110", GUIDS["player"], SPRITES["player_shadow"]["file_id"], sorting_order=-1),
         ]
     ) + "\n"
 
@@ -683,7 +740,7 @@ def demo_scene():
     return "\n".join(
         [
             game_object_doc("900100", "LAYER 1", ["900101"]),
-            transform_doc("900101", "900100", "0", ["900111", "900121", "900131", "900141"], (0.0, 0.0, 0.0)),
+            transform_doc("900101", "900100", "0", ["900111", "900121", "900151", "900131", "900141"], (0.0, 0.0, 0.0)),
             game_object_doc("900110", "Layer 1 - Grass", ["900111", "900112", "900113"]),
             transform_doc("900111", "900110", "900101", [], (0.0, 0.0, 0.0)),
             tilemap_doc(
@@ -700,6 +757,20 @@ def demo_scene():
                 ],
             ),
             tilemap_renderer_doc("900113", "900110", sorting_layer_id=-1869315837, sorting_order=0),
+            game_object_doc("900150", "Layer 1 - Wall", ["900151", "900152", "900153", "900154", "900155"]),
+            transform_doc("900151", "900150", "900101", [], (0.0, 0.0, 0.0)),
+            tilemap_doc(
+                "900152",
+                "900150",
+                [{"file_id": SPRITES["wall_tile"]["file_id"], "guid": GUIDS["tileset_wall"]}],
+                [
+                    {"coords": (0, 1, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                    {"coords": (1, 1, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                ],
+            ),
+            tilemap_renderer_doc("900153", "900150", sorting_layer_id=-1869315837, sorting_order=10),
+            tilemap_collider2d_doc("900154", "900150", is_trigger=False, used_by_composite=False),
+            rigidbody2d_doc("900155", "900150", body_type=2, gravity_scale=0.0),
             game_object_doc("900120", "Layer 1 - Wall Shadow", ["900121", "900122", "900123"]),
             transform_doc("900121", "900120", "900101", [], (0.0, 0.0, 0.0)),
             tilemap_doc(
@@ -714,6 +785,20 @@ def demo_scene():
             game_object_doc("900140", "Main Camera", ["900141", "900142"]),
             transform_doc("900141", "900140", "900101", [], (4.0, 3.0, -10.0)),
             camera_doc("900142", "900140", orthographic=True, orthographic_size=6.0),
+            game_object_doc("900160", "LAYER 2", ["900161"]),
+            transform_doc("900161", "900160", "0", ["900171"], (0.0, 0.0, 0.0)),
+            game_object_doc("900170", "Layer 2 - Wall", ["900171", "900172", "900173", "900174", "900175", "900176"]),
+            transform_doc("900171", "900170", "900161", [], (0.0, 0.0, 0.0)),
+            tilemap_doc(
+                "900172",
+                "900170",
+                [{"file_id": SPRITES["wall_tile"]["file_id"], "guid": GUIDS["tileset_wall"]}],
+                [{"coords": (3, 2, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535}],
+            ),
+            tilemap_renderer_doc("900173", "900170", sorting_layer_id=338507026, sorting_order=10),
+            tilemap_collider2d_doc("900174", "900170", is_trigger=False, used_by_composite=True),
+            composite_collider2d_doc("900175", "900170", [[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]], is_trigger=False),
+            rigidbody2d_doc("900176", "900170", body_type=2, gravity_scale=0.0),
             prefab_instance_doc(
                 "900200",
                 GUIDS["prefab_player"],
@@ -723,6 +808,80 @@ def demo_scene():
                     ("700101", "m_LocalPosition.x", "2"),
                     ("700101", "m_LocalPosition.y", "1"),
                     ("700102", "m_FlipX", "1"),
+                ],
+            ),
+            prefab_instance_doc(
+                "900210",
+                GUIDS["prefab_sorting_stack"],
+                "900131",
+                [
+                    ("250101", "m_RootOrder", "1"),
+                    ("250101", "m_LocalPosition.x", "3"),
+                    ("250101", "m_LocalPosition.y", "1"),
+                    ("250112", "m_SortingLayerID", "-44025399"),
+                    ("250122", "m_SortingOrder", "5"),
+                ],
+            ),
+        ]
+    ) + "\n"
+
+
+def all_props_scene():
+    return "\n".join(
+        [
+            game_object_doc("910100", "SCENE", ["910101"]),
+            transform_doc("910101", "910100", "0", ["910111", "910121", "910131"], (0.0, 0.0, 0.0)),
+            game_object_doc("910110", "LAYER 1", ["910111"]),
+            transform_doc("910111", "910110", "910101", ["910141", "910151", "910161"], (0.0, 0.0, 0.0)),
+            game_object_doc("910140", "Layer 1 - Grass", ["910141", "910142", "910143"]),
+            transform_doc("910141", "910140", "910111", [], (0.0, 0.0, 0.0)),
+            tilemap_doc(
+                "910142",
+                "910140",
+                [{"file_id": SPRITES["grass_tile"]["file_id"], "guid": GUIDS["tileset_grass"]}],
+                [
+                    {"coords": (0, 0, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                    {"coords": (1, 0, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                ],
+            ),
+            tilemap_renderer_doc("910143", "910140", sorting_layer_id=-1869315837, sorting_order=0),
+            game_object_doc("910150", "Layer 1 - Wall", ["910151", "910152", "910153"]),
+            transform_doc("910151", "910150", "910111", [], (0.0, 0.0, 0.0)),
+            tilemap_doc(
+                "910152",
+                "910150",
+                [{"file_id": SPRITES["wall_tile"]["file_id"], "guid": GUIDS["tileset_wall"]}],
+                [
+                    {"coords": (0, 1, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                    {"coords": (1, 1, 0), "sprite_index": 0, "matrix_index": 0, "color_index": 0, "object_index": 65535},
+                ],
+            ),
+            tilemap_renderer_doc("910153", "910150", sorting_layer_id=-1869315837, sorting_order=1),
+            game_object_doc("910160", "Props", ["910161"]),
+            transform_doc("910161", "910160", "910111", [], (0.0, 0.0, 0.0)),
+            game_object_doc("910120", "RENDERING", ["910121"]),
+            transform_doc("910121", "910120", "910101", ["910171"], (0.0, 0.0, 0.0)),
+            game_object_doc("910170", "Main Camera", ["910171", "910172", "910173"]),
+            transform_doc("910171", "910170", "910121", [], (3.0, 2.0, -10.0)),
+            camera_doc("910172", "910170", orthographic=True, orthographic_size=5.0),
+            mono_behaviour_doc(
+                "910173",
+                "910170",
+                GUIDS["controller_script"],
+                [
+                    "  markerName: Camera Marker",
+                ],
+            ),
+            game_object_doc("910130", "Markers", ["910131"]),
+            transform_doc("910131", "910130", "910101", [], (0.0, 0.0, 0.0)),
+            prefab_instance_doc(
+                "910200",
+                GUIDS["prefab_lantern"],
+                "910161",
+                [
+                    ("200101", "m_RootOrder", "0"),
+                    ("200101", "m_LocalPosition.x", "2"),
+                    ("200101", "m_LocalPosition.y", "1"),
                 ],
             ),
         ]
@@ -777,7 +936,8 @@ def transform_doc(object_id, game_object_id, parent_transform_id, child_transfor
     return "\n".join(lines)
 
 
-def sprite_renderer_doc(object_id, game_object_id, sprite_guid, sprite_file_id, sorting_order=0):
+def sprite_renderer_doc(object_id, game_object_id, sprite_guid, sprite_file_id, sorting_layer_id=0, sorting_order=0, color=(1.0, 1.0, 1.0, 1.0)):
+    r, g, b, a = color
     return "\n".join(
         [
             f"--- !u!212 &{object_id}",
@@ -789,15 +949,16 @@ def sprite_renderer_doc(object_id, game_object_id, sprite_guid, sprite_file_id, 
             f"  m_GameObject: {{fileID: {game_object_id}}}",
             "  m_Enabled: 1",
             f"  m_Sprite: {{fileID: {sprite_file_id}, guid: {sprite_guid}, type: 3}}",
-            "  m_SortingLayerID: 0",
+            f"  m_SortingLayerID: {sorting_layer_id}",
             f"  m_SortingOrder: {sorting_order}",
+            f"  m_Color: {{r: {r}, g: {g}, b: {b}, a: {a}}}",
             "  m_FlipX: 0",
             "  m_FlipY: 0",
         ]
     )
 
 
-def box_collider_doc(object_id, game_object_id, offset, size):
+def box_collider_doc(object_id, game_object_id, offset, size, is_trigger=False):
     ox, oy = offset
     sx, sy = size
     return "\n".join(
@@ -810,7 +971,7 @@ def box_collider_doc(object_id, game_object_id, offset, size):
             "  m_PrefabAsset: {fileID: 0}",
             f"  m_GameObject: {{fileID: {game_object_id}}}",
             "  m_Enabled: 1",
-            "  m_IsTrigger: 0",
+            f"  m_IsTrigger: {1 if is_trigger else 0}",
             f"  m_Offset: {{x: {ox}, y: {oy}}}",
             f"  m_Size: {{x: {sx}, y: {sy}}}",
         ]
@@ -919,6 +1080,51 @@ def rigidbody2d_doc(
             f"  m_Constraints: {constraints}",
         ]
     )
+
+
+def tilemap_collider2d_doc(object_id, game_object_id, is_trigger=False, used_by_composite=False, offset=(0.0, 0.0)):
+    ox, oy = offset
+    return "\n".join(
+        [
+            f"--- !u!19719996 &{object_id}",
+            "TilemapCollider2D:",
+            "  m_ObjectHideFlags: 0",
+            "  m_CorrespondingSourceObject: {fileID: 0}",
+            "  m_PrefabInstance: {fileID: 0}",
+            "  m_PrefabAsset: {fileID: 0}",
+            f"  m_GameObject: {{fileID: {game_object_id}}}",
+            "  m_Enabled: 1",
+            f"  m_IsTrigger: {1 if is_trigger else 0}",
+            f"  m_UsedByComposite: {1 if used_by_composite else 0}",
+            f"  m_Offset: {{x: {ox}, y: {oy}}}",
+        ]
+    )
+
+
+def composite_collider2d_doc(object_id, game_object_id, paths, offset=(0.0, 0.0), is_trigger=False):
+    ox, oy = offset
+    lines = [
+        f"--- !u!66 &{object_id}",
+        "CompositeCollider2D:",
+        "  m_ObjectHideFlags: 0",
+        "  m_CorrespondingSourceObject: {fileID: 0}",
+        "  m_PrefabInstance: {fileID: 0}",
+        "  m_PrefabAsset: {fileID: 0}",
+        f"  m_GameObject: {{fileID: {game_object_id}}}",
+        "  m_Enabled: 1",
+        f"  m_IsTrigger: {1 if is_trigger else 0}",
+        f"  m_Offset: {{x: {ox}, y: {oy}}}",
+        "  m_Paths:",
+    ]
+    for path in paths:
+        if not path:
+            continue
+        first = True
+        for px, py in path:
+            prefix = "    - - " if first else "      - "
+            lines.append(f"{prefix}{{x: {px}, y: {py}}}")
+            first = False
+    return "\n".join(lines)
 
 
 def animator_doc(object_id, game_object_id):

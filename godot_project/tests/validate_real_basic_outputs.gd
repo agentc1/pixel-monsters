@@ -11,11 +11,19 @@ func _init() -> void:
 	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_prefab_catalog.tscn"), "basic_prefab_catalog", false)
 	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_runtime_stairs_demo.tscn"), "basic_runtime_stairs_demo", false)
 	_validate_runtime_demo_scene(output_root.path_join("scenes/helpers/basic_runtime_stairs_demo.tscn"))
+	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_runtime_altar_runes_demo.tscn"), "basic_runtime_altar_runes_demo", false)
+	_validate_altar_runes_demo_scene(output_root.path_join("scenes/helpers/basic_runtime_altar_runes_demo.tscn"))
+	_validate_helper_scene(output_root.path_join("scenes/helpers/basic_runtime_player_demo.tscn"), "basic_runtime_player_demo", false)
+	_validate_player_demo_scene(output_root.path_join("scenes/helpers/basic_runtime_player_demo.tscn"))
 	_validate_imported_unity_scene(output_root.path_join("scenes/unity/SC Demo.tscn"))
 	_validate_imported_unity_scene_preview(output_root.path_join("scenes/helpers/sc_demo_preview.tscn"))
+	_validate_imported_unity_scene_runtime(output_root.path_join("scenes/unity/SC Demo Runtime.tscn"))
+	_validate_imported_all_props_scene(output_root.path_join("scenes/unity/SC All Props.tscn"))
+	_validate_imported_all_props_scene_preview(output_root.path_join("scenes/helpers/sc_all_props_preview.tscn"))
 	_validate_report_files(output_root)
 	_validate_bush_prefab(output_root)
 	_validate_lantern_prefab(output_root)
+	_validate_sorting_layered_prefabs(output_root)
 	_validate_polygon_prefabs(output_root)
 	_validate_runtime_rigidbody_prefabs(output_root)
 	_validate_stairs_prefab(output_root)
@@ -97,6 +105,16 @@ func _validate_imported_unity_scene(scene_path: String) -> void:
 			_assert_true(_used_tile_cell_count(layer) > 0, "Imported SC Demo layer has visible tile content: %s" % layer_name)
 			var warning_counts: Dictionary = layer.get_meta("unity_warning_counts", {})
 			_assert_eq(int(warning_counts.get("unresolved_sprite_reference", -1)), 0, "Imported SC Demo layer resolves tile sprite refs: %s" % layer_name)
+	var layer1_grass := instance.get_node_or_null("Tilemaps/Layer 1 - Grass")
+	var layer1_wall := instance.get_node_or_null("Tilemaps/Layer 1 - Wall")
+	var layer2_wall := instance.get_node_or_null("Tilemaps/Layer 2 - Wall")
+	var layer3_wall := instance.get_node_or_null("Tilemaps/Layer 3 - Wall")
+	if layer1_grass is TileMapLayer and layer1_wall is TileMapLayer:
+		_assert_true((layer1_wall as TileMapLayer).z_index >= (layer1_grass as TileMapLayer).z_index, "Imported SC Demo keeps Layer 1 wall at or above grass z")
+	if layer1_wall is TileMapLayer and layer2_wall is TileMapLayer:
+		_assert_true((layer2_wall as TileMapLayer).z_index > (layer1_wall as TileMapLayer).z_index, "Imported SC Demo Layer 2 wall renders above Layer 1 wall")
+	if layer2_wall is TileMapLayer and layer3_wall is TileMapLayer:
+		_assert_true((layer3_wall as TileMapLayer).z_index > (layer2_wall as TileMapLayer).z_index, "Imported SC Demo Layer 3 wall renders above Layer 2 wall")
 	var player_instance := instance.find_child("PF Player", true, false)
 	_assert_true(player_instance != null, "Imported SC Demo includes placed PF Player instance")
 	_assert_true(instance.find_child("PF Props - Altar 01", true, false) != null, "Imported SC Demo includes placed altar instance")
@@ -121,6 +139,108 @@ func _validate_imported_unity_scene_preview(scene_path: String) -> void:
 	_assert_true(_script_path(instance).ends_with("cainos_imported_scene_preview.gd"), "Imported SC Demo preview uses preview runtime script")
 	_assert_true(str(instance.get("target_scene_path")).ends_with("scenes/unity/SC Demo.tscn"), "Imported SC Demo preview targets raw imported scene")
 	_assert_eq(instance.get("preview_window_size"), Vector2i(1200, 1200), "Imported SC Demo preview window size")
+	instance.free()
+
+
+func _validate_imported_unity_scene_runtime(scene_path: String) -> void:
+	var packed := load(scene_path)
+	_assert_true(packed is PackedScene, "Imported SC Demo runtime scene loads: %s" % scene_path)
+	if not (packed is PackedScene):
+		return
+	var instance: Node = packed.instantiate()
+	_assert_true(instance != null, "Imported SC Demo runtime scene instantiates")
+	if instance == null:
+		return
+	_assert_eq(instance.name, "SC Demo Runtime", "Imported SC Demo runtime root name")
+	var scene_instance := instance.get_node_or_null("SceneInstance")
+	var scene_collision := instance.get_node_or_null("SceneCollision")
+	var runtime_player := instance.get_node_or_null("RuntimePlayer")
+	_assert_true(scene_instance is Node2D, "Imported SC Demo runtime includes SceneInstance")
+	_assert_true(scene_collision is Node2D, "Imported SC Demo runtime includes SceneCollision")
+	_assert_true(runtime_player is CharacterBody2D, "Imported SC Demo runtime includes CharacterBody2D RuntimePlayer")
+	if scene_instance is Node:
+		_assert_true(scene_instance.get_node_or_null("SC Demo") is Node2D, "Imported SC Demo runtime instances raw SC Demo scene")
+		_assert_true(scene_instance.get_node_or_null("SC Demo/Prefabs/PF Player") == null, "Imported SC Demo runtime removes placeholder PF Player")
+		if scene_collision is Node:
+			var expected_collision_layers := {
+				"Layer 1 - Wall Collision": 1,
+				"Layer 2 - Wall Collision": 2,
+				"Layer 3 - Wall Collision": 4,
+			}
+			for collision_name in expected_collision_layers.keys():
+				var collision_body := scene_collision.get_node_or_null(str(collision_name))
+				_assert_true(collision_body is StaticBody2D, "Imported SC Demo runtime includes collision body: %s" % collision_name)
+				if collision_body is StaticBody2D:
+					_assert_eq((collision_body as StaticBody2D).collision_layer, int(expected_collision_layers[collision_name]), "Imported SC Demo runtime collision body uses elevation physics bit: %s" % collision_name)
+			_assert_true(_count_collision_shapes(scene_collision) + _count_collision_polygons(scene_collision) > 0, "Imported SC Demo runtime includes collision geometry")
+		if runtime_player is CharacterBody2D:
+			_assert_true(_script_path(runtime_player).ends_with("cainos_runtime_player_body_2d.gd"), "Imported SC Demo runtime uses runtime player body script")
+			_assert_vector2_close((runtime_player as CharacterBody2D).position, Vector2(186.24, -73.92), "Imported SC Demo runtime player spawn position")
+			_assert_eq((runtime_player as CharacterBody2D).collision_layer, 1, "Imported SC Demo runtime player remains on trigger-detectable actor layer")
+			_assert_eq((runtime_player as CharacterBody2D).collision_mask, 1, "Imported SC Demo runtime player starts colliding with Layer 1 geometry")
+			_assert_true(runtime_player.get_node_or_null("PF Player") is Node2D, "Imported SC Demo runtime keeps imported PF Player child")
+			_assert_true(runtime_player.get_node_or_null("FollowCamera2D") is Camera2D, "Imported SC Demo runtime includes live follow camera")
+			var player_root := runtime_player.get_node_or_null("PF Player")
+			if player_root is Node:
+				_assert_true(_script_path(player_root).ends_with("cainos_top_down_player_controller_2d.gd"), "Imported SC Demo runtime child player uses runtime controller")
+				_assert_eq(str(player_root.get("movement_mode")), "external_body", "Imported SC Demo runtime child player uses external_body movement")
+				var helper := player_root.get_node_or_null("CainosRuntimeActor2D")
+				if helper != null and helper.has_method("apply_runtime_layer"):
+					helper.call("apply_runtime_layer", "Layer 2", "Layer 2")
+					_assert_eq((runtime_player as CharacterBody2D).collision_mask, 2, "Imported SC Demo runtime player switches to Layer 2 geometry with runtime layer")
+			var wrapper_collision := _first_collision_shape(runtime_player)
+			_assert_true(wrapper_collision != null, "Imported SC Demo runtime wrapper clones player collision shape")
+		if scene_instance is Node:
+			_assert_collision_layer_if_present(scene_instance, "SC Demo/Prefabs/Layer 1/Props/PF Struct - Gate 01/Collider T/BoxCollider_0", 2, "Gate 01 top collider is upper-elevation only")
+			_assert_collision_layer_if_present(scene_instance, "SC Demo/Prefabs/Layer 1/Props/PF Struct - Gate 01/Collider L/BoxCollider_0", 1, "Gate 01 side collider stays lower-elevation")
+			_assert_collision_layer_if_present(scene_instance, "SC Demo/Prefabs/Layer 1/Props/PF Struct - Gate 02/Collider T/BoxCollider_0", 2, "Gate 02 top collider is upper-elevation only")
+			_assert_collision_layer_if_present(scene_instance, "SC Demo/Prefabs/Layer 1/Props/PF Struct - Stairs E 02/Collider Upper/PolygonCollider_0", 2, "East stairs upper collider is upper-elevation")
+			_assert_collision_layer_if_present(scene_instance, "SC Demo/Prefabs/Layer 1/Props/PF Struct - Stairs E 02/Collider Lower/BoxCollider_0", 1, "East stairs lower collider stays lower-elevation")
+		instance.free()
+
+
+func _validate_imported_all_props_scene(scene_path: String) -> void:
+	var packed := load(scene_path)
+	_assert_true(packed is PackedScene, "Imported SC All Props scene loads: %s" % scene_path)
+	if not (packed is PackedScene):
+		return
+	var instance: Node = packed.instantiate()
+	_assert_true(instance != null, "Imported SC All Props scene instantiates")
+	if instance == null:
+		return
+	_assert_eq(instance.name, "SC All Props", "Imported SC All Props root name")
+	_assert_true(instance.get_node_or_null("Tilemaps") is Node2D, "Imported SC All Props includes Tilemaps")
+	_assert_true(instance.get_node_or_null("Prefabs") is Node2D, "Imported SC All Props includes Prefabs")
+	_assert_true(instance.get_node_or_null("Markers") is Node2D, "Imported SC All Props includes Markers")
+	_assert_eq(_count_tile_map_layers(instance), 2, "Imported SC All Props tile layer count")
+	for layer_name in ["Layer 1 - Grass", "Layer 1 - Wall"]:
+		var layer := instance.get_node_or_null("Tilemaps/%s" % layer_name)
+		_assert_true(layer is TileMapLayer, "Imported SC All Props keeps TileMapLayer: %s" % layer_name)
+		if layer is TileMapLayer:
+			_assert_true(_used_tile_cell_count(layer) > 0, "Imported SC All Props layer has visible tile content: %s" % layer_name)
+	_assert_true(instance.get_node_or_null("Markers/Main Camera Marker") is Node2D, "Imported SC All Props includes main camera marker")
+	var prefabs_root := instance.get_node_or_null("Prefabs")
+	_assert_true(prefabs_root is Node, "Imported SC All Props includes Prefabs root node")
+	if prefabs_root is Node:
+		_assert_true(prefabs_root.get_child_count() > 0, "Imported SC All Props includes placed prefab instances")
+	instance.free()
+
+
+func _validate_imported_all_props_scene_preview(scene_path: String) -> void:
+	var packed := load(scene_path)
+	_assert_true(packed is PackedScene, "Imported SC All Props preview scene loads: %s" % scene_path)
+	if not (packed is PackedScene):
+		return
+	var instance: Node = packed.instantiate()
+	_assert_true(instance != null, "Imported SC All Props preview scene instantiates")
+	if instance == null:
+		return
+	_assert_eq(instance.name, "sc_all_props_preview", "Imported SC All Props preview root name")
+	_assert_true(instance.get_node_or_null("SceneInstance") is Node2D, "Imported SC All Props preview includes SceneInstance host")
+	_assert_true(instance.get_node_or_null("PreviewCamera2D") is Camera2D, "Imported SC All Props preview includes PreviewCamera2D")
+	_assert_true(_script_path(instance).ends_with("cainos_imported_scene_preview.gd"), "Imported SC All Props preview uses preview runtime script")
+	_assert_true(str(instance.get("target_scene_path")).ends_with("scenes/unity/SC All Props.tscn"), "Imported SC All Props preview targets raw imported scene")
+	_assert_eq(instance.get("preview_window_size"), Vector2i(1200, 1200), "Imported SC All Props preview window size")
 	instance.free()
 
 
@@ -152,6 +272,7 @@ func _validate_lantern_prefab(output_root: String) -> void:
 	if shadow_sprite != null:
 		_assert_rect2_close(shadow_sprite.region_rect, Rect2(453.0, 129.0, 28.0, 26.0), "Stone Lantern shadow sprite region")
 		_assert_true(_sprite_region_has_visible_pixels(shadow_sprite), "Stone Lantern shadow sprite samples visible pixels")
+		_assert_eq(shadow_sprite.z_as_relative, false, "Stone Lantern shadow sprite uses absolute z")
 		if sprite != null:
 			_assert_true(shadow_sprite.z_index < sprite.z_index, "Stone Lantern shadow renders behind lantern body")
 	var body := root.find_child("BoxCollider_0", true, false)
@@ -162,6 +283,35 @@ func _validate_lantern_prefab(output_root: String) -> void:
 		if shape_node != null:
 			_assert_true(shape_node.shape is RectangleShape2D, "Stone Lantern collider shape is RectangleShape2D")
 	root.free()
+
+
+func _validate_sorting_layered_prefabs(output_root: String) -> void:
+	for spec in [
+		{"family": "plants", "name": "PF Plant - Tree 01"},
+		{"family": "plants", "name": "PF Plant - Tree 02"},
+		{"family": "plants", "name": "PF Plant - Tree 03"},
+		{"family": "struct", "name": "PF Struct - Gate 01"},
+		{"family": "struct", "name": "PF Struct - Gate 02"},
+	]:
+		var root := _instantiate_prefab(output_root, str(spec.get("family", "")), str(spec.get("name", "")))
+		if root == null:
+			continue
+		var layer1_sprites := _sprites_by_effective_layer(root, "Layer 1")
+		var layer2_sprites := _sprites_by_effective_layer(root, "Layer 2")
+		_assert_true(not layer1_sprites.is_empty(), "%s keeps Layer 1 visual sprites" % str(spec.get("name", "")))
+		_assert_true(not layer2_sprites.is_empty(), "%s keeps Layer 2 visual sprites" % str(spec.get("name", "")))
+		for sprite_variant in layer1_sprites + layer2_sprites:
+			var sprite := sprite_variant as Sprite2D
+			_assert_eq(sprite.z_as_relative, false, "%s sprite uses absolute z: %s" % [str(spec.get("name", "")), sprite.name])
+			_assert_eq(int(sprite.get_meta("cainos_effective_z_index", -99999)), sprite.z_index, "%s sprite effective z metadata matches z_index: %s" % [str(spec.get("name", "")), sprite.name])
+		for sprite_variant in layer2_sprites:
+			var sprite := sprite_variant as Sprite2D
+			_assert_eq(bool(sprite.get_meta("cainos_foreground_occluder", false)), true, "%s Layer 2 top sprite is tagged as foreground occluder: %s" % [str(spec.get("name", "")), sprite.name])
+			_assert_eq(int(sprite.get_meta("cainos_foreground_occluder_offset", 0)), 50, "%s Layer 2 top sprite records foreground occluder offset: %s" % [str(spec.get("name", "")), sprite.name])
+		if not layer1_sprites.is_empty() and not layer2_sprites.is_empty():
+			_assert_true(_min_sprite_z(layer2_sprites) > _max_sprite_z(layer1_sprites), "%s Layer 2 visuals render above Layer 1 visuals" % str(spec.get("name", "")))
+			_assert_true(_min_sprite_z(layer2_sprites) > 102, "%s Layer 2 foreground visuals occlude a Layer 2 runtime player" % str(spec.get("name", "")))
+		root.free()
 
 
 func _validate_polygon_prefabs(output_root: String) -> void:
@@ -250,8 +400,11 @@ func _validate_stairs_prefab(output_root: String) -> void:
 			_assert_eq(_first_sprite_z(player_root), base_z + 100, "South stairs runtime enter raises PF Player z")
 			player_root.position = trigger_position + Vector2(0, 16)
 			behaviour_node.call("apply_exit_for_actor", player_root)
-			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 1", "South stairs runtime exit restores PF Player to Layer 1")
-			_assert_eq(_first_sprite_z(player_root), base_z, "South stairs runtime exit restores PF Player z")
+			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 2", "South stairs runtime exit keeps PF Player on Layer 2 after crossing")
+			player_root.position = trigger_position + Vector2(0, -16)
+			behaviour_node.call("apply_exit_for_actor", player_root)
+			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 1", "South stairs runtime exit restores PF Player to Layer 1 from lower side")
+			_assert_eq(_first_sprite_z(player_root), base_z, "South stairs runtime exit restores PF Player z from lower side")
 			player_root.free()
 	root.free()
 
@@ -296,18 +449,18 @@ func _validate_runtime_demo_scene(scene_path: String) -> void:
 	_assert_true(instance != null, "Runtime stairs demo scene instantiates for layout validation")
 	if instance == null:
 		return
-	var controller := instance.get_node_or_null("DemoController")
 	var player := instance.get_node_or_null("PF Player")
 	var south_stairs := instance.get_node_or_null("PF Struct - Stairs S 01 L")
 	var south_trigger := instance.get_node_or_null("PF Struct - Stairs S 01 L/Stairs Layer Trigger")
 	var east_lower := instance.get_node_or_null("PF Struct - Stairs E 01/Stairs L/Stairs L Sprite")
 	var east_upper := instance.get_node_or_null("PF Struct - Stairs E 01/Stairs U/Stairs U Sprite")
-	_assert_true(controller != null, "Runtime stairs demo includes DemoController for layout validation")
 	_assert_true(player is Node2D, "Runtime stairs demo includes player for layout validation")
+	_assert_true(player != null and _script_path(player).ends_with("cainos_top_down_player_controller_2d.gd"), "Runtime stairs demo uses imported player controller")
+	_assert_true(instance.get_node_or_null("PF Player/FollowCamera2D") is Camera2D, "Runtime stairs demo includes player follow camera")
 	_assert_true(south_stairs is Node2D, "Runtime stairs demo includes south stairs for layout validation")
 	_assert_true(south_trigger is Node2D, "Runtime stairs demo includes south trigger for layout validation")
-	if controller != null and player is Node2D and south_stairs is Node2D and south_trigger is Node2D:
-		var movement_bounds: Rect2 = controller.get("movement_bounds")
+	if player is Node2D and south_stairs is Node2D and south_trigger is Node2D:
+		var movement_bounds: Rect2 = player.get("movement_bounds")
 		_assert_true(movement_bounds.has_point((player as Node2D).position), "Runtime stairs demo player spawn stays inside movement bounds")
 		var south_trigger_position := (south_stairs as Node2D).position + (south_trigger as Node2D).position
 		_assert_true(movement_bounds.has_point(south_trigger_position), "Runtime stairs demo south trigger stays inside movement bounds")
@@ -317,34 +470,111 @@ func _validate_runtime_demo_scene(scene_path: String) -> void:
 	instance.free()
 
 
+func _validate_altar_runes_demo_scene(scene_path: String) -> void:
+	var packed := load(scene_path)
+	_assert_true(packed is PackedScene, "Runtime altar/runes demo scene loads: %s" % scene_path)
+	if not (packed is PackedScene):
+		return
+	var instance: Node = packed.instantiate()
+	_assert_true(instance != null, "Runtime altar/runes demo scene instantiates: %s" % scene_path)
+	if instance == null:
+		return
+	_assert_eq(instance.name, "basic_runtime_altar_runes_demo", "Runtime altar/runes demo root name")
+	_assert_true(instance.get_node_or_null("PF Props - Altar 01") != null, "Runtime altar/runes demo includes altar instance")
+	_assert_true(instance.get_node_or_null("PF Props - Rune Pillar X2") != null, "Runtime altar/runes demo includes rune pillar X2 instance")
+	_assert_true(instance.get_node_or_null("PF Props - Rune Pillar X3") != null, "Runtime altar/runes demo includes rune pillar X3 instance")
+	_assert_true(instance.get_node_or_null("PF Player") != null and _script_path(instance.get_node_or_null("PF Player")).ends_with("cainos_top_down_player_controller_2d.gd"), "Runtime altar/runes demo uses imported player controller")
+	_assert_true(instance.get_node_or_null("PF Player/FollowCamera2D") is Camera2D, "Runtime altar/runes demo includes player follow camera")
+	instance.free()
+
+
+func _validate_player_demo_scene(scene_path: String) -> void:
+	var packed := load(scene_path)
+	_assert_true(packed is PackedScene, "Runtime player demo scene loads: %s" % scene_path)
+	if not (packed is PackedScene):
+		return
+	var instance: Node = packed.instantiate()
+	_assert_true(instance != null, "Runtime player demo scene instantiates: %s" % scene_path)
+	if instance == null:
+		return
+	_assert_eq(instance.name, "basic_runtime_player_demo", "Runtime player demo root name")
+	var player := instance.get_node_or_null("PF Player")
+	_assert_true(player is Node2D, "Runtime player demo includes PF Player")
+	_assert_true(player != null and _script_path(player).ends_with("cainos_top_down_player_controller_2d.gd"), "Runtime player demo uses imported player controller")
+	_assert_true(instance.get_node_or_null("PF Player/FollowCamera2D") is Camera2D, "Runtime player demo includes player follow camera")
+	instance.free()
+
+
 func _validate_altar_prefab(output_root: String) -> void:
 	var root := _instantiate_prefab(output_root, "props", "PF Props - Altar 01")
 	if root == null:
 		return
 	var hints := _behavior_hints_for(root, "altar_trigger")
 	_assert_true(not hints.is_empty(), "Altar prefab exposes altar_trigger behavior hint")
+	_assert_true(_script_path(root).ends_with("cainos_altar_trigger_2d.gd"), "Altar prefab uses altar runtime script")
+	root.call("_ready")
 	if not hints.is_empty():
 		var data: Dictionary = hints[0].get("data", {})
 		_assert_true(Array(data.get("rune_node_paths", [])).size() >= 1, "Altar behavior hint preserves rune node paths")
+	var trigger := root.get_node_or_null("BoxCollider_0")
+	_assert_true(trigger is Area2D, "Altar prefab keeps trigger Area2D")
+	var rune_sprites := [
+		root.get_node_or_null("Rune/1/1 Sprite"),
+		root.get_node_or_null("Rune/2/2 Sprite"),
+		root.get_node_or_null("Rune/3/3 Sprite"),
+		root.get_node_or_null("Rune/4/4 Sprite"),
+	]
+	for rune_sprite_variant in rune_sprites:
+		_assert_true(rune_sprite_variant is Sprite2D, "Altar prefab keeps rune sprite node")
+		if rune_sprite_variant is Sprite2D:
+			var rune_sprite := rune_sprite_variant as Sprite2D
+			_assert_float_close(rune_sprite.modulate.a, 0.0, "Altar rune starts hidden")
+			_assert_true(rune_sprite.modulate.g > 0.9 and rune_sprite.modulate.b >= 1.0, "Altar rune keeps imported cyan tint")
+	if trigger is Area2D:
+		var body := StaticBody2D.new()
+		root.call("apply_enter_for_body", body)
+		root.call("_process", 1.0)
+		for rune_sprite_variant in rune_sprites:
+			if rune_sprite_variant is Sprite2D:
+				_assert_true((rune_sprite_variant as Sprite2D).modulate.a > 0.0, "Altar runtime enter raises rune alpha")
+		root.call("apply_exit_for_body", body)
+		root.call("_process", 1.0)
+		for rune_sprite_variant in rune_sprites:
+			if rune_sprite_variant is Sprite2D:
+				_assert_true((rune_sprite_variant as Sprite2D).modulate.a < 0.5, "Altar runtime exit lowers rune alpha")
+		body.free()
 	root.free()
 
 
 func _validate_rune_prefab(output_root: String) -> void:
-	var root := _instantiate_prefab(output_root, "props", "PF Props - Rune Pillar X2")
-	if root == null:
-		return
-	_assert_true(not _behavior_hints_for(root, "sprite_color_animation").is_empty(), "Rune pillar exposes sprite_color_animation behavior hint")
-	var glow := root.find_child("Glow", true, false)
-	_assert_true(glow != null, "Rune pillar keeps Glow node")
-	if glow != null:
-		_assert_true(not _behavior_hints_for(glow, "sprite_color_animation").is_empty(), "Glow node keeps local sprite_color_animation hint")
-	root.free()
+	for prefab_name in ["PF Props - Rune Pillar X2", "PF Props - Rune Pillar X3"]:
+		var root := _instantiate_prefab(output_root, "props", prefab_name)
+		if root == null:
+			continue
+		_assert_true(not _behavior_hints_for(root, "sprite_color_animation").is_empty(), "Rune pillar exposes sprite_color_animation behavior hint: %s" % prefab_name)
+		var glow := root.find_child("Glow", true, false)
+		_assert_true(glow != null, "Rune pillar keeps Glow node: %s" % prefab_name)
+		if glow != null:
+			_assert_true(not _behavior_hints_for(glow, "sprite_color_animation").is_empty(), "Glow node keeps local sprite_color_animation hint: %s" % prefab_name)
+			_assert_true(_script_path(glow).ends_with("cainos_sprite_color_animation_2d.gd"), "Glow node uses runtime color animation script: %s" % prefab_name)
+			glow.call("_ready")
+			var glow_sprite := glow.get_node_or_null("Glow Sprite")
+			_assert_true(glow_sprite is Sprite2D, "Rune pillar keeps Glow Sprite: %s" % prefab_name)
+			if glow_sprite is Sprite2D:
+				glow.call("apply_animation_at_ratio", 0.0)
+				var before_color := (glow_sprite as Sprite2D).modulate
+				glow.call("apply_animation_at_ratio", 0.5)
+				var after_color := (glow_sprite as Sprite2D).modulate
+				_assert_true(before_color != after_color, "Rune runtime animation updates Glow Sprite modulate: %s" % prefab_name)
+		root.free()
 
 
 func _validate_player_prefab(output_root: String) -> void:
 	var root := _instantiate_prefab(output_root, "player", "PF Player")
 	if root == null:
 		return
+	_assert_true(root is Node2D and not (root is RigidBody2D), "Player prefab root remains Node2D")
+	_assert_true(_script_path(root).ends_with("cainos_top_down_player_controller_2d.gd"), "Player prefab root uses runtime controller script")
 	_assert_true(_find_first_sprite(root) != null, "Player prefab includes a Sprite2D descendant")
 	var player_sprite := _find_sprite_by_name(root, "PF Player Sprite")
 	_assert_true(player_sprite != null, "Player prefab keeps PF Player Sprite node")
@@ -356,10 +586,34 @@ func _validate_player_prefab(output_root: String) -> void:
 	if shadow_sprite != null:
 		_assert_rect2_close(shadow_sprite.region_rect, Rect2(99.0, 32.0, 27.0, 28.0), "Player shadow sprite region")
 		_assert_true(_sprite_region_has_visible_pixels(shadow_sprite), "Player shadow sprite samples visible pixels")
+		_assert_eq(shadow_sprite.z_as_relative, false, "Player shadow sprite uses absolute z")
 		if player_sprite != null:
 			_assert_true(shadow_sprite.z_index < player_sprite.z_index, "Player shadow renders behind player body")
 	_assert_true(not _behavior_hints_for(root, "top_down_character_controller").is_empty(), "Player prefab exposes top_down_character_controller behavior hint")
-	_assert_true(_find_runtime_actor_helper(root) != null, "Player prefab includes runtime actor helper")
+	_assert_float_close(float(root.get("move_speed_px")), 96.0, "Player controller speed converts Unity hint to pixels per second")
+	root.call("apply_facing", "north", false)
+	if player_sprite != null:
+		_assert_rect2_close(player_sprite.region_rect, Rect2(38.0, 10.0, 21.0, 48.0), "Player north-facing sprite region")
+	root.call("apply_facing", "east", true)
+	if player_sprite != null:
+		_assert_rect2_close(player_sprite.region_rect, Rect2(69.0, 10.0, 21.0, 48.0), "Player east-facing sprite region")
+		_assert_eq(player_sprite.flip_h, false, "Player east-facing side sprite is unflipped")
+	root.call("apply_facing", "west", true)
+	if player_sprite != null:
+		_assert_rect2_close(player_sprite.region_rect, Rect2(69.0, 10.0, 21.0, 48.0), "Player west-facing sprite region")
+		_assert_eq(player_sprite.flip_h, true, "Player west-facing side sprite is flipped")
+	var initial_position: Vector2 = root.position
+	root.call("step_with_input", Vector2.RIGHT, 1.0)
+	_assert_true(root.position.x > initial_position.x, "Player controller step_with_input advances position")
+	_assert_eq(str(root.get_meta("cainos_player_direction", "")), "east", "Player controller stores runtime direction metadata")
+	_assert_eq(int(root.get_meta("cainos_player_direction_value", -1)), 2, "Player controller stores runtime direction value metadata")
+	_assert_eq(bool(root.get_meta("cainos_player_moving", false)), true, "Player controller stores moving metadata")
+	var helper := _find_runtime_actor_helper(root)
+	_assert_true(helper != null, "Player prefab includes runtime actor helper")
+	if helper != null:
+		helper.call("_ready")
+		helper.call("_ensure_runtime_sensor")
+		_assert_true(root.get_node_or_null("CainosRuntimeSensor2D") is Area2D, "Player runtime actor helper creates trigger sensor")
 	root.free()
 
 
@@ -367,11 +621,11 @@ func _validate_report_files(output_root: String) -> void:
 	var compatibility_report = _load_json_file(output_root.path_join("reports/compatibility_report.json"))
 	_assert_true(compatibility_report is Dictionary, "Compatibility report JSON loads")
 	if compatibility_report is Dictionary:
-		_assert_eq(int(compatibility_report.get("format_version", -1)), 8, "Compatibility report format_version")
+		_assert_eq(int(compatibility_report.get("format_version", -1)), 12, "Compatibility report format_version")
 		var summary: Dictionary = compatibility_report.get("summary", {})
-		_assert_eq(int(summary.get("supported_static_prefabs", -1)), 74, "Compatibility report supported count")
+		_assert_eq(int(summary.get("supported_static_prefabs", -1)), 78, "Compatibility report supported count")
 		_assert_eq(int(summary.get("approximated_prefabs", -1)), 0, "Compatibility report approximated count")
-		_assert_eq(int(summary.get("manual_behavior_prefabs", -1)), 4, "Compatibility report manual count")
+		_assert_eq(int(summary.get("manual_behavior_prefabs", -1)), 0, "Compatibility report manual count")
 		_assert_eq(int(summary.get("unresolved_or_skipped_prefabs", -1)), 0, "Compatibility report unresolved count")
 		_assert_eq(int(summary.get("editor_only_prefabs", -1)), 3, "Compatibility report editor-only count")
 		var stairs_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Struct - Stairs S 01 L")
@@ -401,10 +655,15 @@ func _validate_report_files(output_root: String) -> void:
 			_assert_eq(int(scene_entry.get("tile_layer_count", -1)), 10, "Compatibility report SC Demo tile layer count")
 			_assert_eq(int(scene_entry.get("placed_prefab_count", -1)), 264, "Compatibility report SC Demo prefab count")
 			_assert_true(not str(scene_entry.get("preview_scene_path", "")).is_empty(), "Compatibility report SC Demo preview path")
-		var deferred_scene_entry := _find_unity_scene_entry(unity_scenes, "SC All Props")
-		_assert_true(not deferred_scene_entry.is_empty(), "Compatibility report includes deferred SC All Props entry")
-		if not deferred_scene_entry.is_empty():
-			_assert_eq(str(deferred_scene_entry.get("status", "")), "deferred", "Compatibility report SC All Props status")
+			_assert_true(not str(scene_entry.get("runtime_scene_path", "")).is_empty(), "Compatibility report SC Demo runtime path")
+		var all_props_scene_entry := _find_unity_scene_entry(unity_scenes, "SC All Props")
+		_assert_true(not all_props_scene_entry.is_empty(), "Compatibility report includes SC All Props scene entry")
+		if not all_props_scene_entry.is_empty():
+			_assert_eq(str(all_props_scene_entry.get("status", "")), "imported", "Compatibility report SC All Props status")
+			_assert_eq(int(all_props_scene_entry.get("tile_layer_count", -1)), 2, "Compatibility report SC All Props tile layer count")
+			_assert_eq(int(all_props_scene_entry.get("placed_prefab_count", -1)), 118, "Compatibility report SC All Props prefab count")
+			_assert_true(not str(all_props_scene_entry.get("preview_scene_path", "")).is_empty(), "Compatibility report SC All Props preview path")
+			_assert_true(str(all_props_scene_entry.get("runtime_scene_path", "")).is_empty(), "Compatibility report SC All Props omits runtime path")
 		for prefab_name in [
 			"PF Props - Statue 01",
 			"PF Props - Stone 06",
@@ -433,9 +692,23 @@ func _validate_report_files(output_root: String) -> void:
 			_assert_true(not Array(entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report omits deferred rigidbody reason for imported sample: %s" % prefab_name)
 		var player_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), "PF Player")
 		_assert_true(not player_entry.is_empty(), "Compatibility report includes PF Player entry")
-		_assert_eq(str(player_entry.get("tier", "")), "manual_behavior", "Compatibility report PF Player tier")
-		_assert_true(Array(player_entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report PF Player keeps deferred rigidbody reason")
+		_assert_eq(str(player_entry.get("tier", "")), "supported_static", "Compatibility report PF Player tier")
+		_assert_true(Array(player_entry.get("reasons", [])).has("player_controller_runtime_imported"), "Compatibility report PF Player includes controller runtime reason")
+		_assert_true(Array(player_entry.get("reasons", [])).has("player_directional_facing_imported"), "Compatibility report PF Player includes directional facing reason")
 		_assert_true(Array(player_entry.get("reasons", [])).has("runtime_actor_helper_attached"), "Compatibility report PF Player includes runtime actor helper reason")
+		_assert_true(not Array(player_entry.get("reasons", [])).has("rigidbody_deferred"), "Compatibility report PF Player omits deferred rigidbody reason")
+		for prefab_name in ["PF Props - Altar 01", "PF Props - Rune Pillar X2", "PF Props - Rune Pillar X3"]:
+			var runtime_entry := _find_tier_prefab_entry(compatibility_report.get("tiers", {}), prefab_name)
+			_assert_true(not runtime_entry.is_empty(), "Compatibility report includes altar/rune runtime prefab: %s" % prefab_name)
+			_assert_eq(str(runtime_entry.get("tier", "")), "supported_static", "Compatibility report altar/rune runtime tier: %s" % prefab_name)
+			var runtime_reasons := Array(runtime_entry.get("reasons", []))
+			if prefab_name == "PF Props - Altar 01":
+				_assert_true(runtime_reasons.has("altar_runtime_imported"), "Compatibility report altar runtime reason")
+				_assert_true(runtime_reasons.has("altar_trigger_hint"), "Compatibility report altar hint reason")
+			else:
+				_assert_true(runtime_reasons.has("sprite_color_animation_runtime_imported"), "Compatibility report rune runtime reason: %s" % prefab_name)
+				_assert_true(runtime_reasons.has("sprite_color_animation_hint"), "Compatibility report rune hint reason: %s" % prefab_name)
+			_assert_true(not runtime_reasons.has("mono_behaviour_present"), "Compatibility report omits blocking mono reason for runtime-imported prefab: %s" % prefab_name)
 		var unresolved_entries: Array = compatibility_report.get("tiers", {}).get("unresolved_or_skipped", [])
 		_assert_eq(unresolved_entries.size(), 0, "Compatibility report unresolved tier is empty")
 		var editor_only_prefabs: Array = compatibility_report.get("editor_only_prefabs", [])
@@ -445,7 +718,7 @@ func _validate_report_files(output_root: String) -> void:
 	var asset_catalog = _load_json_file(output_root.path_join("reports/asset_catalog.json"))
 	_assert_true(asset_catalog is Dictionary, "Asset catalog JSON loads")
 	if asset_catalog is Dictionary:
-		_assert_eq(int(asset_catalog.get("format_version", -1)), 8, "Asset catalog format_version")
+		_assert_eq(int(asset_catalog.get("format_version", -1)), 12, "Asset catalog format_version")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Plant - Bush 01").is_empty(), "Asset catalog includes Bush prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Stone Lantern 01").is_empty(), "Asset catalog includes Stone Lantern prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Well 01").is_empty(), "Asset catalog includes Well prefab")
@@ -464,12 +737,21 @@ func _validate_report_files(output_root: String) -> void:
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Struct - Stairs W 02").is_empty(), "Asset catalog includes Stairs W 02 prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Altar 01").is_empty(), "Asset catalog includes Altar prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Rune Pillar X2").is_empty(), "Asset catalog includes Rune Pillar prefab")
+		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Props - Rune Pillar X3").is_empty(), "Asset catalog includes Rune Pillar X3 prefab")
 		_assert_true(not _find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "PF Player").is_empty(), "Asset catalog includes Player prefab")
 		_assert_true(_find_helper_scene_entry(asset_catalog.get("helper_scenes", []), "basic_runtime_stairs_demo") != null, "Asset catalog includes runtime stairs demo helper scene")
+		_assert_true(_find_helper_scene_entry(asset_catalog.get("helper_scenes", []), "basic_runtime_altar_runes_demo") != null, "Asset catalog includes runtime altar/runes demo helper scene")
+		_assert_true(_find_helper_scene_entry(asset_catalog.get("helper_scenes", []), "basic_runtime_player_demo") != null, "Asset catalog includes runtime player demo helper scene")
 		var imported_scene_entry := _find_unity_scene_entry(asset_catalog.get("imported_scenes", []), "SC Demo")
 		_assert_true(not imported_scene_entry.is_empty(), "Asset catalog includes imported SC Demo scene")
 		if not imported_scene_entry.is_empty():
 			_assert_true(not str(imported_scene_entry.get("preview_scene_path", "")).is_empty(), "Asset catalog includes imported SC Demo preview path")
+			_assert_true(not str(imported_scene_entry.get("runtime_scene_path", "")).is_empty(), "Asset catalog includes imported SC Demo runtime path")
+		var all_props_catalog_entry := _find_unity_scene_entry(asset_catalog.get("imported_scenes", []), "SC All Props")
+		_assert_true(not all_props_catalog_entry.is_empty(), "Asset catalog includes imported SC All Props scene")
+		if not all_props_catalog_entry.is_empty():
+			_assert_true(not str(all_props_catalog_entry.get("preview_scene_path", "")).is_empty(), "Asset catalog includes imported SC All Props preview path")
+			_assert_true(str(all_props_catalog_entry.get("runtime_scene_path", "")).is_empty(), "Asset catalog omits runtime path for SC All Props")
 		_assert_true(_find_catalog_prefab_entry(asset_catalog.get("prefabs", []), "TP Grass").is_empty(), "Asset catalog omits editor-only tile palette prefab")
 
 
@@ -537,6 +819,39 @@ func _find_runtime_actor_helper(node: Node) -> Node:
 		if found != null:
 			return found
 	return null
+
+
+func _sprites_by_effective_layer(node: Node, layer_name: String) -> Array[Sprite2D]:
+	var sprites: Array[Sprite2D] = []
+	if node is Sprite2D and str(node.get_meta("cainos_effective_sorting_layer_name", "")) == layer_name:
+		sprites.append(node as Sprite2D)
+	for child in node.get_children():
+		sprites.append_array(_sprites_by_effective_layer(child, layer_name))
+	return sprites
+
+
+func _min_sprite_z(sprites: Array[Sprite2D]) -> int:
+	var value := 0
+	var initialized := false
+	for sprite in sprites:
+		if not initialized:
+			value = sprite.z_index
+			initialized = true
+		else:
+			value = mini(value, sprite.z_index)
+	return value
+
+
+func _max_sprite_z(sprites: Array[Sprite2D]) -> int:
+	var value := 0
+	var initialized := false
+	for sprite in sprites:
+		if not initialized:
+			value = sprite.z_index
+			initialized = true
+		else:
+			value = maxi(value, sprite.z_index)
+	return value
 
 
 func _script_path(node: Node) -> String:
@@ -671,6 +986,15 @@ func _load_json_file(res_path: String):
 	if not FileAccess.file_exists(abs_path):
 		return null
 	return JSON.parse_string(FileAccess.get_file_as_string(abs_path))
+
+
+func _assert_collision_layer_if_present(root: Node, node_path: String, expected_layer: int, message: String) -> void:
+	var node := root.get_node_or_null(node_path)
+	if node == null:
+		return
+	_assert_true(node is CollisionObject2D, "%s node is collision object" % message)
+	if node is CollisionObject2D:
+		_assert_eq((node as CollisionObject2D).collision_layer, expected_layer, message)
 
 
 func _assert_true(condition: bool, message: String) -> void:

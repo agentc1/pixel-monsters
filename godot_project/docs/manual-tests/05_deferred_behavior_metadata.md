@@ -2,7 +2,7 @@
 
 ## Goal
 
-Confirm that the remaining manual-behavior prefabs, plus the runtime stairs prefabs, expose normalized `cainos_behavior_hints` metadata in addition to the legacy raw Unity metadata where applicable.
+Confirm that the remaining manual player prefab, plus the runtime stairs and altar/rune prefabs, expose normalized `cainos_behavior_hints` metadata in addition to the legacy raw Unity metadata where applicable.
 
 These checks assume you have already imported the Basic pack.
 
@@ -41,6 +41,7 @@ Check:
   - `trigger_mode`
 
 Expected result:
+- the altar scene is runtime-enabled, but the normalized hint remains present for traceability
 - the rune-node paths point at the generated rune helper nodes in the scene
 
 ## 3. Rune pillar glow
@@ -59,6 +60,10 @@ Check:
   - `gradient_mode`
   - `color_keys`
   - `alpha_keys`
+
+Expected result:
+- the rune pillar scene is runtime-enabled
+- the normalized glow-animation hint is still present on both the root and `Glow` node
 
 ## 4. Player controller
 
@@ -95,6 +100,7 @@ Check:
 - Rune Pillar exposes normalized `sprite_color_animation` hints
 - Player exposes normalized `top_down_character_controller` hints
 - Editor-only Unity tile-palette prefabs are reported separately from semantic prefab tiers
+- runtime-enabled prefabs still keep their normalized hints for traceability
 
 ## If it fails
 

@@ -51,5 +51,6 @@ PY
 "${GODOT_BIN}" --headless --path "${GODOT_PROJECT}" --script res://tools/headless_basic_import.gd -- --mode import --source "${SOURCE_PATH}" --output-root "${OUTPUT_ROOT}"
 "${GODOT_BIN}" --headless --import --path "${GODOT_PROJECT}"
 "${GODOT_BIN}" --headless --path "${GODOT_PROJECT}" --script res://tests/validate_real_basic_outputs.gd -- --output-root "${OUTPUT_ROOT}"
+"${GODOT_BIN}" --headless --path "${GODOT_PROJECT}" --script res://tests/validate_real_basic_runtime_navigation.gd -- --output-root "${OUTPUT_ROOT}"
 
 echo "Basic importer real-pack acceptance passed."

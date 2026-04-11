@@ -5,12 +5,15 @@
 The addon imports a locally supplied **Pixel Art Top Down - Basic** pack into:
 - external `TileSet` resources for `TileMapLayer`
 - named prefab scenes reconstructed from Unity metadata when available
-- an imported authoring-first Godot scene for `SC Demo.unity`
-- a framed preview wrapper for `SC Demo` so the imported map is centered and readable at runtime
+- imported authoring-first Godot scenes for `SC Demo.unity` and `SC All Props.unity`
+- framed preview wrappers for both shipped Unity scenes so the imported maps are centered and readable at runtime
+- a playable `SC Demo Runtime` wrapper with real scene collision and a live follow camera
 - fallback atlas-cell scenes only when you enable them
 - player helper assets
 - preview/catalog helper scenes
+- a runtime player demo scene
 - a runtime stairs demo scene
+- a runtime altar/runes demo scene
 - manifest, catalog, and compatibility reports
 
 ## First import
@@ -37,11 +40,16 @@ Look under `res://cainos_imports/basic/`:
 Important generated scene paths:
 - `res://cainos_imports/basic/scenes/helpers/basic_preview_map.tscn`
 - `res://cainos_imports/basic/scenes/helpers/basic_prefab_catalog.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_player_demo.tscn`
 - `res://cainos_imports/basic/scenes/helpers/basic_runtime_stairs_demo.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_altar_runes_demo.tscn`
 - `res://cainos_imports/basic/scenes/unity/SC Demo.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC Demo Runtime.tscn`
 - `res://cainos_imports/basic/scenes/helpers/sc_demo_preview.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC All Props.tscn`
+- `res://cainos_imports/basic/scenes/helpers/sc_all_props_preview.tscn`
 
-The importer currently generates `SC Demo.tscn` as the raw authoring import, `sc_demo_preview.tscn` as the framed visual preview, and reports `SC All Props.unity` as discovered but deferred.
+The importer currently generates `SC Demo.tscn` and `SC All Props.tscn` as raw authoring imports, `sc_demo_preview.tscn` and `sc_all_props_preview.tscn` as framed visual previews, and `SC Demo Runtime.tscn` as the playable wrapper for the shipped demo scene.
 
 ## How to paint a map
 
@@ -62,11 +70,16 @@ The importer currently generates `SC Demo.tscn` as the raw authoring import, `sc
 The importer also generates:
 - `res://cainos_imports/basic/scenes/helpers/basic_preview_map.tscn`
 - `res://cainos_imports/basic/scenes/helpers/basic_prefab_catalog.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_player_demo.tscn`
 - `res://cainos_imports/basic/scenes/helpers/basic_runtime_stairs_demo.tscn`
+- `res://cainos_imports/basic/scenes/helpers/basic_runtime_altar_runes_demo.tscn`
 - `res://cainos_imports/basic/scenes/unity/SC Demo.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC Demo Runtime.tscn`
 - `res://cainos_imports/basic/scenes/helpers/sc_demo_preview.tscn`
+- `res://cainos_imports/basic/scenes/unity/SC All Props.tscn`
+- `res://cainos_imports/basic/scenes/helpers/sc_all_props_preview.tscn`
 
-Use `SC Demo.tscn` for raw structure/authoring checks and `sc_demo_preview.tscn` for runtime visual validation against the reference screenshot.
+Use `SC Demo.tscn` and `SC All Props.tscn` for raw structure/authoring checks, `sc_demo_preview.tscn` and `sc_all_props_preview.tscn` for framed visual comparison, and `SC Demo Runtime.tscn` for playable validation with the imported player, wall collision, and follow camera.
 
 ## Automated regression check
 
@@ -95,6 +108,9 @@ Beginner-friendly manual checks are documented here:
 - `godot_project/docs/manual-tests/08_runtime_stairs_support.md`
 - `godot_project/docs/manual-tests/09_godot_mcp_bridge.md`
 - `godot_project/docs/manual-tests/10_imported_unity_scene_demo.md`
+- `godot_project/docs/manual-tests/11_runtime_altar_runes_support.md`
+- `godot_project/docs/manual-tests/12_runtime_player_support.md`
+- `godot_project/docs/manual-tests/13_sc_demo_runtime_scene.md`
 
 Testing tracks:
 - synthetic track: run `./godot_project/tests/run_basic_regressions.sh` with no licensed content

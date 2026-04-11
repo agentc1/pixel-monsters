@@ -369,6 +369,7 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 					"sprite_file_id": _extract_ref_file_id(body, "m_Sprite"),
 					"flip_x": _extract_bool(body, "m_FlipX"),
 					"flip_y": _extract_bool(body, "m_FlipY"),
+					"color": _extract_color(body, "m_Color", Color(1.0, 1.0, 1.0, 1.0)),
 				}
 			"BoxCollider2D":
 				box_colliders[object_id] = {
@@ -633,7 +634,12 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 		nodes[node_id] = node
 
 	var behavior_kinds := _behavior_kinds_from_hints(behavior_hints)
-	var stairs_runtime_supported := _behavior_kinds_are_stairs_only(behavior_kinds) and not has_animator
+	var runtime_supported_behavior_kinds := _runtime_supported_behavior_kinds(behavior_kinds, has_animator)
+	var all_behavior_runtime_supported := not behavior_kinds.is_empty() and runtime_supported_behavior_kinds.size() == behavior_kinds.size()
+	var stairs_runtime_supported := all_behavior_runtime_supported and _behavior_kinds_are_stairs_only(behavior_kinds)
+	var sprite_color_animation_runtime_supported := all_behavior_runtime_supported and behavior_kinds.has("sprite_color_animation")
+	var altar_runtime_supported := all_behavior_runtime_supported and behavior_kinds.has("altar_trigger")
+	var player_controller_runtime_supported := all_behavior_runtime_supported and behavior_kinds.has("top_down_character_controller")
 	var runtime_actor_helper_attached := imported_rigidbody_count > 0 or behavior_kinds.has("top_down_character_controller")
 	var renderer_sprite_paths := {}
 	var mono_node_paths := {}
@@ -660,9 +666,9 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 	var has_deferred_polygon := polygon_paths_deferred > 0
 	if not unresolved_sprite_refs.is_empty():
 		support_tier = "unresolved_or_skipped"
-	elif (has_mono or has_animator) and not stairs_runtime_supported:
+	elif (has_mono or has_animator) and not all_behavior_runtime_supported:
 		support_tier = "manual_behavior"
-	elif has_deferred_polygon or deferred_rigidbody_count > 0 or has_complex_edge:
+	elif has_deferred_polygon or (deferred_rigidbody_count > 0 and not player_controller_runtime_supported) or has_complex_edge:
 		support_tier = "approximated"
 
 	var reason_tokens := _prefab_reason_tokens(
@@ -679,6 +685,9 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 		imported_rigidbody_count > 0,
 		deferred_rigidbody_count > 0,
 		stairs_runtime_supported,
+		sprite_color_animation_runtime_supported,
+		altar_runtime_supported,
+		player_controller_runtime_supported,
 		runtime_actor_helper_attached
 	)
 	var report_details := _prefab_report_details(
@@ -719,7 +728,7 @@ func _parse_prefab(asset_path: String, prefab_text: String, script_guid_to_path:
 
 func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: Dictionary, sprites: Dictionary, tile_palette_tiles: Dictionary, asset_paths_by_guid: Dictionary, prefabs_by_guid: Dictionary) -> Dictionary:
 	var scene_name := asset_path.get_file().trim_suffix(".unity")
-	if scene_name != "SC Demo":
+	if not ["SC Demo", "SC All Props"].has(scene_name):
 		return {
 			"ok": true,
 			"path": asset_path,
@@ -727,7 +736,7 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 			"import_supported": false,
 			"status": "deferred",
 			"detail": "Scene import is deferred in this milestone.",
-			"next_step": "Import SC Demo first; SC All Props can be added as a follow-up scene-import slice.",
+			"next_step": "Import support is currently scoped to the shipped SC Demo and SC All Props Unity scenes.",
 		}
 
 	var normalized_text := scene_text.replace("\r\n", "\n")
@@ -743,14 +752,12 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 	var transforms := {}
 	var tilemaps := {}
 	var tilemap_renderers := {}
+	var tilemap_colliders := {}
+	var composite_colliders := {}
+	var scene_rigidbodies := {}
 	var cameras := {}
 	var mono_behaviours := {}
 	var prefab_instances := []
-	var deferred_feature_counts := {
-		"tilemap_colliders": 0,
-		"composite_colliders": 0,
-		"scene_rigidbodies": 0,
-	}
 
 	for document in documents:
 		var document_class_name := str(document.get("class_name", ""))
@@ -789,6 +796,29 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 					"sorting_layer_id": _extract_int(body, "m_SortingLayerID", 0),
 					"sorting_order": _extract_int(body, "m_SortingOrder", 0),
 				}
+			"TilemapCollider2D":
+				tilemap_colliders[object_id] = {
+					"id": object_id,
+					"game_object_id": _extract_ref_file_id(body, "m_GameObject"),
+					"is_trigger": _extract_bool(body, "m_IsTrigger"),
+					"used_by_composite": _extract_bool(body, "m_UsedByComposite"),
+					"offset": _extract_vector2(body, "m_Offset"),
+				}
+			"CompositeCollider2D":
+				composite_colliders[object_id] = {
+					"id": object_id,
+					"game_object_id": _extract_ref_file_id(body, "m_GameObject"),
+					"is_trigger": _extract_bool(body, "m_IsTrigger"),
+					"offset": _extract_vector2(body, "m_Offset"),
+					"paths": _extract_polygon_paths(body),
+				}
+			"Rigidbody2D":
+				scene_rigidbodies[object_id] = {
+					"id": object_id,
+					"game_object_id": _extract_ref_file_id(body, "m_GameObject"),
+					"body_type": _extract_int(body, "m_BodyType", 2),
+					"simulated": _extract_bool_default(body, "m_Simulated", true),
+				}
 			"Camera":
 				cameras[object_id] = {
 					"id": object_id,
@@ -807,12 +837,6 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 				}
 			"PrefabInstance":
 				prefab_instances.append(_parse_scene_prefab_instance(body, asset_paths_by_guid, prefabs_by_guid))
-			"TilemapCollider2D":
-				deferred_feature_counts["tilemap_colliders"] += 1
-			"CompositeCollider2D":
-				deferred_feature_counts["composite_colliders"] += 1
-			"Rigidbody2D":
-				deferred_feature_counts["scene_rigidbodies"] += 1
 
 	var transform_to_game_object := {}
 	for transform_id_variant in transforms.keys():
@@ -858,6 +882,18 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 	for renderer_variant in tilemap_renderers.values():
 		var renderer: Dictionary = renderer_variant
 		tilemap_renderers_by_go[str(renderer.get("game_object_id", "0"))] = renderer
+	var tilemap_colliders_by_go := {}
+	for collider_variant in tilemap_colliders.values():
+		var collider: Dictionary = collider_variant
+		tilemap_colliders_by_go[str(collider.get("game_object_id", "0"))] = collider
+	var composite_colliders_by_go := {}
+	for collider_variant in composite_colliders.values():
+		var collider: Dictionary = collider_variant
+		composite_colliders_by_go[str(collider.get("game_object_id", "0"))] = collider
+	var scene_rigidbodies_by_go := {}
+	for rigidbody_variant in scene_rigidbodies.values():
+		var rigidbody: Dictionary = rigidbody_variant
+		scene_rigidbodies_by_go[str(rigidbody.get("game_object_id", "0"))] = rigidbody
 
 	var tilemap_descriptors := []
 	var total_skipped_cells := 0
@@ -865,6 +901,9 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 		var tilemap: Dictionary = tilemap_variant
 		var tilemap_game_object_id := str(tilemap.get("game_object_id", "0"))
 		var renderer: Dictionary = tilemap_renderers_by_go.get(tilemap_game_object_id, {})
+		var tilemap_collider: Dictionary = tilemap_colliders_by_go.get(tilemap_game_object_id, {})
+		var composite_collider: Dictionary = composite_colliders_by_go.get(tilemap_game_object_id, {})
+		var scene_rigidbody: Dictionary = scene_rigidbodies_by_go.get(tilemap_game_object_id, {})
 		var warning_counts := {
 			"unresolved_sprite_reference": 0,
 			"unsupported_tile_texture": 0,
@@ -926,6 +965,7 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 		for warning_count_variant in warning_counts.values():
 			skipped_cells += int(warning_count_variant)
 		total_skipped_cells += skipped_cells
+		var collision_descriptor := _scene_tilemap_collision_descriptor(tilemap_collider, composite_collider, scene_rigidbody)
 		tilemap_descriptors.append({
 			"name": str(scene_nodes.get(tilemap_game_object_id, {}).get("name", "Tilemap")),
 			"game_object_id": tilemap_game_object_id,
@@ -940,6 +980,7 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 			"imported_cell_count": accepted_cells.size(),
 			"skipped_cell_count": skipped_cells,
 			"warning_counts": warning_counts,
+			"collision": collision_descriptor,
 		})
 
 	var prefab_instance_descriptors := []
@@ -984,21 +1025,60 @@ func _parse_scene(asset_path: String, scene_text: String, script_guid_to_path: D
 				"fields": Dictionary(mono.get("fields", {})).duplicate(true),
 			})
 
+	var runtime_supported := scene_name == "SC Demo"
+	var next_step := "Use the generated SC Demo Runtime scene for playable validation, SC Demo Preview for framed comparison, and SC Demo for raw authoring."
+	if not runtime_supported:
+		next_step = "Use the generated SC All Props Preview scene for framed comparison and SC All Props for raw authoring."
 	return {
 		"ok": true,
 		"path": asset_path,
 		"name": scene_name,
 		"import_supported": true,
+		"runtime_supported": runtime_supported,
 		"tilemaps": tilemap_descriptors,
 		"prefab_instances": prefab_instance_descriptors,
 		"camera_markers": camera_descriptors,
 		"scene_level_mono_behaviours": scene_level_monos,
-		"deferred_feature_counts": deferred_feature_counts,
+		"deferred_feature_counts": _scene_remaining_deferred_feature_counts(scene_level_monos, camera_descriptors),
 		"placed_prefab_count": prefab_instance_descriptors.size(),
 		"tile_layer_count": tilemap_descriptors.size(),
 		"skipped_tile_cell_count": total_skipped_cells,
-		"next_step": "Open the generated SC Demo scene in Godot and use it as an authoring-first reference map; scene-level colliders and runtime scripts are still deferred.",
+		"next_step": next_step,
 	}
+
+
+func _scene_tilemap_collision_descriptor(tilemap_collider: Dictionary, composite_collider: Dictionary, scene_rigidbody: Dictionary) -> Dictionary:
+	if tilemap_collider.is_empty() and composite_collider.is_empty():
+		return {}
+	var composite_paths: Array = composite_collider.get("paths", [])
+	var geometry_mode := "none"
+	if not composite_paths.is_empty():
+		geometry_mode = "composite_paths"
+	elif not tilemap_collider.is_empty():
+		geometry_mode = "tile_cells"
+	return {
+		"runtime_supported": geometry_mode != "none",
+		"geometry_mode": geometry_mode,
+		"is_trigger": bool(tilemap_collider.get("is_trigger", false)) or bool(composite_collider.get("is_trigger", false)),
+		"used_by_composite": bool(tilemap_collider.get("used_by_composite", false)),
+		"offset": composite_collider.get("offset", tilemap_collider.get("offset", Vector2.ZERO)),
+		"composite_paths": composite_paths.duplicate(true),
+		"rigidbody_body_type": int(scene_rigidbody.get("body_type", 2)),
+		"rigidbody_simulated": bool(scene_rigidbody.get("simulated", true)),
+	}
+
+
+func _scene_remaining_deferred_feature_counts(scene_level_monos: Array, camera_descriptors: Array) -> Dictionary:
+	var deferred := {}
+	if not scene_level_monos.is_empty():
+		deferred["scene_level_mono_behaviours"] = scene_level_monos.size()
+	var camera_script_count := 0
+	for camera_variant in camera_descriptors:
+		var camera: Dictionary = camera_variant
+		camera_script_count += Array(camera.get("script_paths", [])).size()
+	if camera_script_count > 0:
+		deferred["camera_scripts"] = camera_script_count
+	return deferred
 
 
 func _resolve_scene_tile_sprite_desc(sprite_ref: Dictionary, tile_asset_ref: Dictionary, sprites: Dictionary, tile_palette_tiles: Dictionary) -> Dictionary:
@@ -1304,6 +1384,13 @@ func _parse_color_literal(value: String) -> Dictionary:
 		"b": float(match[2]),
 		"a": float(match[3]),
 	}
+
+
+func _extract_color(body: String, key: String, default_value: Color = Color(1.0, 1.0, 1.0, 1.0)) -> Color:
+	var match := _regex_search(body, "(?m)^\\s*%s: \\{r: ([^,]+), g: ([^,]+), b: ([^,]+), a: ([^\\}]+)\\}$" % key)
+	if match.size() < 4:
+		return default_value
+	return Color(float(match[0]), float(match[1]), float(match[2]), float(match[3]))
 
 
 func _gradient_time_to_ratio(value) -> float:
@@ -1785,6 +1872,9 @@ func _prefab_reason_tokens(
 	has_imported_rigidbody: bool,
 	has_deferred_rigidbody: bool,
 	stairs_runtime_supported: bool,
+	sprite_color_animation_runtime_supported: bool,
+	altar_runtime_supported: bool,
+	player_controller_runtime_supported: bool,
 	runtime_actor_helper_attached: bool
 ) -> Array:
 	var reasons := []
@@ -1801,7 +1891,7 @@ func _prefab_reason_tokens(
 		reasons.append("polygon_collider_deferred_complex")
 	if not unresolved_sprite_refs.is_empty():
 		reasons.append("unresolved_sprite_reference")
-	if has_mono and not stairs_runtime_supported:
+	if has_mono and not (stairs_runtime_supported or sprite_color_animation_runtime_supported or altar_runtime_supported or player_controller_runtime_supported):
 		reasons.append("mono_behaviour_present")
 	for behavior_kind_variant in behavior_kinds:
 		match str(behavior_kind_variant):
@@ -1813,14 +1903,21 @@ func _prefab_reason_tokens(
 				reasons.append("altar_trigger_hint")
 			"top_down_character_controller":
 				reasons.append("top_down_character_controller_hint")
-	if has_animator:
+	if has_animator and not player_controller_runtime_supported:
 		reasons.append("animator_present")
 	if has_imported_rigidbody:
 		reasons.append("rigidbody_imported")
-	if has_rigidbody and has_deferred_rigidbody:
+	if has_rigidbody and has_deferred_rigidbody and not player_controller_runtime_supported:
 		reasons.append("rigidbody_deferred")
 	if stairs_runtime_supported:
 		reasons.append("stairs_runtime_imported")
+	if sprite_color_animation_runtime_supported:
+		reasons.append("sprite_color_animation_runtime_imported")
+	if altar_runtime_supported:
+		reasons.append("altar_runtime_imported")
+	if player_controller_runtime_supported:
+		reasons.append("player_controller_runtime_imported")
+		reasons.append("player_directional_facing_imported")
 	if runtime_actor_helper_attached:
 		reasons.append("runtime_actor_helper_attached")
 	return reasons
@@ -1872,6 +1969,12 @@ func _prefab_report_details(
 func _prefab_next_step(support_tier: String, reason_tokens: Array, behavior_kinds: Array = []) -> String:
 	if reason_tokens.has("stairs_runtime_imported") and support_tier == "supported_static":
 		return "Place the generated stairs scene directly in Godot; the directional render-layer trigger is already configured."
+	if reason_tokens.has("altar_runtime_imported") and support_tier == "supported_static":
+		return "Place the generated altar scene directly in Godot; the trigger-driven rune glow behavior is already configured."
+	if reason_tokens.has("sprite_color_animation_runtime_imported") and support_tier == "supported_static":
+		return "Place the generated scene directly in Godot; the looping rune glow animation is already configured."
+	if reason_tokens.has("player_controller_runtime_imported") and support_tier == "supported_static":
+		return "Place the generated player scene directly in Godot; directional facing, movement, and runtime helper compatibility are already configured."
 	if reason_tokens.has("stairs_layer_trigger_hint"):
 		if support_tier == "unresolved_or_skipped":
 			return "Repair the unresolved stairs sprite mapping, then rebuild the layer/sorting trigger in Godot from the preserved stairs behavior hint."
@@ -1910,6 +2013,17 @@ func _behavior_kinds_are_stairs_only(behavior_kinds: Array) -> bool:
 		if str(behavior_kind_variant) != "stairs_layer_trigger":
 			return false
 	return true
+
+
+func _runtime_supported_behavior_kinds(behavior_kinds: Array, has_animator: bool) -> Array:
+	var supported := []
+	for behavior_kind_variant in behavior_kinds:
+		var behavior_kind := str(behavior_kind_variant)
+		if behavior_kind == "top_down_character_controller" and not supported.has(behavior_kind):
+			supported.append(behavior_kind)
+		elif not has_animator and behavior_kind in ["stairs_layer_trigger", "sprite_color_animation", "altar_trigger"] and not supported.has(behavior_kind):
+			supported.append(behavior_kind)
+	return supported
 
 
 func _rigidbody_config_supported(rigidbody: Dictionary) -> bool:
