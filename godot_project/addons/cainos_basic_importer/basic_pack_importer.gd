@@ -12,7 +12,7 @@ const CainosStairsTrigger2D := preload("res://addons/cainos_basic_importer/runti
 
 const PACK_ID := "basic"
 const IMPORTER_ID := "cainos_basic_importer"
-const IMPORTER_VERSION := "0.13.1"
+const IMPORTER_VERSION := "0.13.3"
 const REPORT_FORMAT_VERSION := 12
 const DEFAULT_OUTPUT_ROOT := "res://cainos_imports/basic"
 const TILE_SIZE := Vector2i(32, 32)
@@ -23,6 +23,10 @@ const STAIR_UPPER_Z_OFFSET := 50
 const FOREGROUND_OCCLUDER_Z_OFFSET := 50
 const BRIDGE_UNDERPASS_CARVE_OFFSET := Vector2(-64.0, -96.0)
 const BRIDGE_UNDERPASS_CARVE_SIZE := Vector2(128.0, 160.0)
+const STAIR_RUNTIME_CARVE_WIDTH := 96.0
+const STAIR_RUNTIME_CARVE_DEPTH := 128.0
+const STAIR_RUNTIME_WALKABLE_WIDTH := 96.0
+const STAIR_RUNTIME_WALKABLE_DEPTH := 224.0
 const RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE := Vector2(6.0, 6.0)
 const RUNTIME_ACTOR_COLLISION_LAYER_BIT := 1
 const RUNTIME_ELEVATION_COLLISION_BITS := {
@@ -1313,7 +1317,7 @@ func _generate_unity_scene_runtime(scene: Dictionary, raw_scene_path: String, pr
 	root.add_child(scene_instance_root)
 	scene_instance_root.add_child(raw_instance)
 
-	var collision_root := _build_unity_scene_collision_root(scene, _runtime_bridge_underpass_carve_rects_by_layer(scene))
+	var collision_root := _build_unity_scene_collision_root(scene, _runtime_scene_carve_rects_by_layer(scene))
 	root.add_child(collision_root)
 
 	var runtime_player := runtime_player_result.get("node") as CharacterBody2D
@@ -1376,6 +1380,7 @@ func _build_unity_scene_runtime_player(scene: Dictionary, raw_scene_root: Node2D
 	runtime_player.set_meta("cainos_runtime_elevation_body", true)
 	runtime_player.set_meta("cainos_runtime_collision_layer_name", player_layer_name)
 	runtime_player.set_meta("cainos_runtime_collision_mask", int(runtime_player.collision_mask))
+	runtime_player.set("walkable_regions_by_layer", _runtime_walkable_regions_by_layer(scene))
 
 	var player_root := player_instance as Node2D
 	player_root.position = Vector2.ZERO
@@ -1614,8 +1619,14 @@ func _build_unity_scene_collision_root(scene: Dictionary, carve_rects_by_layer :
 	return root
 
 
-func _runtime_bridge_underpass_carve_rects_by_layer(scene: Dictionary) -> Dictionary:
+func _runtime_scene_carve_rects_by_layer(scene: Dictionary) -> Dictionary:
 	var carve_rects_by_layer := {}
+	_add_runtime_bridge_underpass_carve_rects(scene, carve_rects_by_layer)
+	_add_runtime_stair_opening_carve_rects(scene, carve_rects_by_layer)
+	return carve_rects_by_layer
+
+
+func _add_runtime_bridge_underpass_carve_rects(scene: Dictionary, carve_rects_by_layer: Dictionary) -> void:
 	for instance_variant in scene.get("prefab_instances", []):
 		var instance: Dictionary = instance_variant
 		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
@@ -1628,7 +1639,92 @@ func _runtime_bridge_underpass_carve_rects_by_layer(scene: Dictionary) -> Dictio
 		var layer_rects: Array = carve_rects_by_layer.get(layer_name, [])
 		layer_rects.append(carve_rect)
 		carve_rects_by_layer[layer_name] = layer_rects
-	return carve_rects_by_layer
+
+
+func _add_runtime_stair_opening_carve_rects(scene: Dictionary, carve_rects_by_layer: Dictionary) -> void:
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
+		if not source_prefab_path.contains("/pf struct - stairs"):
+			continue
+		var base_layer_name := str(instance.get("layer_name", "Layer 1"))
+		var upper_layer_name := _next_runtime_layer_name(base_layer_name)
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
+		var carve_rect := _runtime_stair_opening_carve_rect(root_position, source_prefab_path)
+		if carve_rect.size.x <= 0.0 or carve_rect.size.y <= 0.0:
+			continue
+		var layer_rects: Array = carve_rects_by_layer.get(upper_layer_name, [])
+		layer_rects.append(carve_rect)
+		carve_rects_by_layer[upper_layer_name] = layer_rects
+
+
+func _runtime_stair_opening_carve_rect(root_position: Vector2, source_prefab_path: String) -> Rect2:
+	var half_width := STAIR_RUNTIME_CARVE_WIDTH * 0.5
+	if source_prefab_path.contains("stairs s"):
+		return Rect2(root_position + Vector2(-half_width, -STAIR_RUNTIME_CARVE_DEPTH + 32.0), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
+	if source_prefab_path.contains("stairs n"):
+		return Rect2(root_position + Vector2(-half_width, -32.0), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
+	if source_prefab_path.contains("stairs w"):
+		return Rect2(root_position + Vector2(-32.0, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
+	if source_prefab_path.contains("stairs e"):
+		return Rect2(root_position + Vector2(-STAIR_RUNTIME_CARVE_DEPTH + 32.0, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
+	return Rect2()
+
+
+func _runtime_walkable_regions_by_layer(scene: Dictionary) -> Dictionary:
+	var regions_by_layer := {}
+	for tilemap_variant in scene.get("tilemaps", []):
+		var tilemap: Dictionary = tilemap_variant
+		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
+		if layer_name == "Layer 1" or not _tilemap_is_runtime_walkable_surface(tilemap):
+			continue
+		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
+		var tilemap_origin := _unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU)
+		var regions: Array = regions_by_layer.get(layer_name, [])
+		for rect_variant in _tile_collision_rect_runs(tilemap.get("cells", [])):
+			var rect: Rect2 = rect_variant
+			regions.append(Rect2(tilemap_origin + rect.position, rect.size))
+		regions_by_layer[layer_name] = regions
+	_add_runtime_stair_walkable_regions(scene, regions_by_layer)
+	return regions_by_layer
+
+
+func _tilemap_is_runtime_walkable_surface(tilemap: Dictionary) -> bool:
+	var name := str(tilemap.get("name", "")).to_lower()
+	if name.contains("wall") or name.contains("shadow"):
+		return false
+	return name.contains("grass") or name.contains("stone ground")
+
+
+func _add_runtime_stair_walkable_regions(scene: Dictionary, regions_by_layer: Dictionary) -> void:
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
+		if not source_prefab_path.contains("/pf struct - stairs"):
+			continue
+		var base_layer_name := str(instance.get("layer_name", "Layer 1"))
+		if base_layer_name == "Layer 3":
+			continue
+		var upper_layer_name := _next_runtime_layer_name(base_layer_name)
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
+		var walkable_rect := _runtime_stair_walkable_rect(root_position, source_prefab_path)
+		if walkable_rect.size.x <= 0.0 or walkable_rect.size.y <= 0.0:
+			continue
+		var regions: Array = regions_by_layer.get(upper_layer_name, [])
+		regions.append(walkable_rect)
+		regions_by_layer[upper_layer_name] = regions
+
+
+func _runtime_stair_walkable_rect(root_position: Vector2, source_prefab_path: String) -> Rect2:
+	var half_width := STAIR_RUNTIME_WALKABLE_WIDTH * 0.5
+	var half_depth := STAIR_RUNTIME_WALKABLE_DEPTH * 0.5
+	if source_prefab_path.contains("stairs s") or source_prefab_path.contains("stairs n"):
+		return Rect2(root_position + Vector2(-half_width, -half_depth), Vector2(STAIR_RUNTIME_WALKABLE_WIDTH, STAIR_RUNTIME_WALKABLE_DEPTH))
+	if source_prefab_path.contains("stairs w") or source_prefab_path.contains("stairs e"):
+		return Rect2(root_position + Vector2(-half_depth, -half_width), Vector2(STAIR_RUNTIME_WALKABLE_DEPTH, STAIR_RUNTIME_WALKABLE_WIDTH))
+	return Rect2()
 
 
 func _runtime_local_carve_rects_for_layer(layer_name: String, carve_rects_by_layer: Dictionary, collision_body_position: Vector2) -> Array:

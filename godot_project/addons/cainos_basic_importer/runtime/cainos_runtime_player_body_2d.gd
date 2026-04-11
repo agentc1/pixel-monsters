@@ -16,6 +16,7 @@ const LAYER_COLLISION_BITS := {
 @export var current_collision_layer_name := "Layer 1"
 @export var rigidbody_push_speed_px := 96.0
 @export var rigidbody_push_acceleration_px := 960.0
+@export var walkable_regions_by_layer := {}
 
 var _player_root: Node2D
 var _controller: Node
@@ -39,6 +40,7 @@ func _physics_process(delta: float) -> void:
 		return
 	var input_vector := _movement_input()
 	velocity = _desired_velocity(input_vector)
+	velocity = _constrain_velocity_to_walkable(velocity, delta)
 	move_and_slide()
 	_push_rigidbody_collisions(input_vector, delta)
 	_controller.call("step_external_body", input_vector, delta)
@@ -87,6 +89,38 @@ func _current_runtime_layer_name() -> String:
 
 func _layer_collision_bit(layer_name: String) -> int:
 	return int(LAYER_COLLISION_BITS.get(layer_name, LAYER_COLLISION_BITS["Layer 1"]))
+
+
+func _constrain_velocity_to_walkable(proposed_velocity: Vector2, delta: float) -> Vector2:
+	if proposed_velocity.length_squared() <= 0.0001 or delta <= 0.0:
+		return proposed_velocity
+	var regions := _current_walkable_regions()
+	if regions.is_empty():
+		return proposed_velocity
+	var current_position := global_position
+	var proposed_position := current_position + proposed_velocity * delta
+	if _is_walkable_point(proposed_position, regions):
+		return proposed_velocity
+	var x_only_position := Vector2(proposed_position.x, current_position.y)
+	if _is_walkable_point(x_only_position, regions):
+		return Vector2(proposed_velocity.x, 0.0)
+	var y_only_position := Vector2(current_position.x, proposed_position.y)
+	if _is_walkable_point(y_only_position, regions):
+		return Vector2(0.0, proposed_velocity.y)
+	return Vector2.ZERO
+
+
+func _current_walkable_regions() -> Array:
+	var regions := walkable_regions_by_layer.get(current_collision_layer_name, [])
+	return regions if regions is Array else []
+
+
+func _is_walkable_point(point: Vector2, regions: Array) -> bool:
+	for region_variant in regions:
+		var region: Rect2 = region_variant
+		if region.has_point(point):
+			return true
+	return false
 
 
 func _push_rigidbody_collisions(input_vector: Vector2, delta: float) -> void:

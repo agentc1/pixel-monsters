@@ -130,13 +130,13 @@ func _find_runtime_actor_helper(node: Node) -> CainosRuntimeActor2D:
 func _matches_upper_condition(actor_root: Node2D) -> bool:
 	match direction:
 		"south":
-			return actor_root.global_position.y > global_position.y
-		"west":
-			return actor_root.global_position.x < global_position.x
-		"east":
-			return actor_root.global_position.x > global_position.x
-		"north":
 			return actor_root.global_position.y < global_position.y
+		"west":
+			return actor_root.global_position.x > global_position.x
+		"east":
+			return actor_root.global_position.x < global_position.x
+		"north":
+			return actor_root.global_position.y > global_position.y
 		_:
 			return false
 

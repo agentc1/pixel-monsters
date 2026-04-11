@@ -818,13 +818,13 @@ func _stairs_upper_test_offset(trigger_node: Node) -> Vector2:
 		direction = str(trigger_node.get("direction"))
 	match direction:
 		"north":
-			return Vector2(0, -16)
-		"east":
-			return Vector2(16, 0)
-		"west":
-			return Vector2(-16, 0)
-		_:
 			return Vector2(0, 16)
+		"east":
+			return Vector2(-16, 0)
+		"west":
+			return Vector2(16, 0)
+		_:
+			return Vector2(0, -16)
 
 
 func _assert_true(condition: bool, message: String) -> void:

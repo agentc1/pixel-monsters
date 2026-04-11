@@ -27,6 +27,8 @@ func _run() -> void:
 		await _validate_north_bridge_spawn_route(player)
 		_validate_bridge_underpass_probe(player)
 		await _validate_bridge_underpass_drive(player)
+		await _validate_south_stairs_ascent(player)
+		await _validate_upper_platform_bounds(player)
 	_validate_bridge_occluders(scene)
 
 	scene.free()
@@ -73,12 +75,56 @@ func _validate_bridge_underpass_probe(player: CharacterBody2D) -> void:
 func _validate_bridge_underpass_drive(player: CharacterBody2D) -> void:
 	player.global_position = Vector2(128.0, 250.0)
 	player.velocity = Vector2.ZERO
+	_apply_player_runtime_layer(player, "Layer 1")
 	_send_key(KEY_W, true)
 	for _index in range(150):
 		await physics_frame
 	_send_key(KEY_W, false)
 	await physics_frame
 	_assert_true(player.global_position.y < 100.0, "Runtime player can push through the south bridge underpass route")
+
+
+func _validate_south_stairs_ascent(player: CharacterBody2D) -> void:
+	player.global_position = Vector2(288.0, 52.0)
+	player.velocity = Vector2.ZERO
+	_apply_player_runtime_layer(player, "Layer 1")
+	await physics_frame
+	_send_key(KEY_W, true)
+	for _index in range(150):
+		await physics_frame
+	_send_key(KEY_W, false)
+	await physics_frame
+	var player_root := player.get_node_or_null("PF Player")
+	var layer_name := ""
+	if player_root != null:
+		layer_name = str(player_root.get_meta("cainos_runtime_layer_name", ""))
+	_assert_true(player.global_position.y < -80.0, "Runtime player can ascend the south stairs onto the upper platform")
+	_assert_true(layer_name == "Layer 2", "Runtime player remains on Layer 2 after south stairs ascent")
+	_assert_true(player.collision_mask == 2, "Runtime player collides with Layer 2 geometry after south stairs ascent")
+
+
+func _validate_upper_platform_bounds(player: CharacterBody2D) -> void:
+	player.global_position = Vector2(288.0, -96.0)
+	player.velocity = Vector2.ZERO
+	_apply_player_runtime_layer(player, "Layer 2")
+	await physics_frame
+	_send_key(KEY_A, true)
+	for _index in range(180):
+		await physics_frame
+	_send_key(KEY_A, false)
+	await physics_frame
+	_assert_true(player.global_position.x > 220.0, "Runtime Layer 2 walkable region blocks westward off-platform drift")
+
+	player.global_position = Vector2(288.0, -96.0)
+	player.velocity = Vector2.ZERO
+	_apply_player_runtime_layer(player, "Layer 2")
+	await physics_frame
+	_send_key(KEY_D, true)
+	for _index in range(180):
+		await physics_frame
+	_send_key(KEY_D, false)
+	await physics_frame
+	_assert_true(player.global_position.x < 410.0, "Runtime Layer 2 walkable region blocks eastward off-platform drift")
 
 
 func _validate_bridge_occluders(scene: Node) -> void:
@@ -100,6 +146,15 @@ func _send_key(keycode: Key, pressed: bool) -> void:
 	event.physical_keycode = keycode
 	event.pressed = pressed
 	Input.parse_input_event(event)
+
+
+func _apply_player_runtime_layer(player: CharacterBody2D, layer_name: String) -> void:
+	var player_root := player.get_node_or_null("PF Player")
+	if player_root == null:
+		return
+	var helper := player_root.get_node_or_null("CainosRuntimeActor2D")
+	if helper != null and helper.has_method("apply_runtime_layer"):
+		helper.call("apply_runtime_layer", layer_name, layer_name)
 
 
 func _assert_true(value: bool, message: String) -> void:
