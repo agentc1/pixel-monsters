@@ -33,12 +33,15 @@ func _physics_process(_delta: float) -> void:
 			continue
 		var actor_id := str(actor_root.get_instance_id())
 		active_ids[actor_id] = true
+		if _actor_uses_grid_navigation_map(actor_root):
+			_actor_inside_state.erase(actor_id)
+			continue
 		var is_inside := _actor_is_inside_trigger_region(helper.get_runtime_anchor_global_position())
 		var was_inside := bool(_actor_inside_state.get(actor_id, false))
-		if is_inside:
-			_apply_actor_layer_for_current_side(actor_root)
-		elif was_inside:
-			_apply_actor_layer_for_current_side(actor_root)
+		if is_inside and not was_inside:
+			_apply_actor_enter_layer(actor_root)
+		elif not is_inside and was_inside:
+			_apply_actor_exit_layer(actor_root)
 		_actor_inside_state[actor_id] = is_inside
 	var stale_ids: Array = []
 	for actor_id_variant in _actor_inside_state.keys():
@@ -52,13 +55,17 @@ func _physics_process(_delta: float) -> void:
 func apply_enter_for_actor(actor_root: Node) -> void:
 	if not (actor_root is Node2D):
 		return
-	_apply_actor_layer_for_current_side(actor_root as Node2D)
+	if _actor_uses_grid_navigation_map(actor_root as Node2D):
+		return
+	_apply_actor_enter_layer(actor_root as Node2D)
 
 
 func apply_exit_for_actor(actor_root: Node) -> void:
 	if not (actor_root is Node2D):
 		return
-	_apply_actor_layer_for_current_side(actor_root as Node2D)
+	if _actor_uses_grid_navigation_map(actor_root as Node2D):
+		return
+	_apply_actor_exit_layer(actor_root as Node2D)
 
 
 func _connect_trigger_areas(node: Node) -> void:
@@ -89,15 +96,21 @@ func _collect_trigger_segments(node: Node) -> void:
 func _on_trigger_body_entered(body: Node) -> void:
 	var actor_root := _resolve_actor_root_from_node(body)
 	if actor_root != null:
+		if _actor_uses_grid_navigation_map(actor_root):
+			_actor_inside_state.erase(str(actor_root.get_instance_id()))
+			return
 		_actor_inside_state[str(actor_root.get_instance_id())] = true
-		_apply_actor_layer_for_current_side(actor_root)
+		_apply_actor_enter_layer(actor_root)
 
 
 func _on_trigger_body_exited(body: Node) -> void:
 	var actor_root := _resolve_actor_root_from_node(body)
 	if actor_root != null:
+		if _actor_uses_grid_navigation_map(actor_root):
+			_actor_inside_state.erase(str(actor_root.get_instance_id()))
+			return
 		_actor_inside_state[str(actor_root.get_instance_id())] = false
-		_apply_actor_layer_for_current_side(actor_root)
+		_apply_actor_exit_layer(actor_root)
 
 
 func _resolve_actor_root_from_node(node: Node) -> Node2D:
@@ -127,24 +140,39 @@ func _find_runtime_actor_helper(node: Node) -> CainosRuntimeActor2D:
 	return null
 
 
-func _matches_upper_condition(actor_root: Node2D) -> bool:
+func _actor_uses_grid_navigation_map(actor_root: Node2D) -> bool:
+	var current: Node = actor_root
+	while current != null:
+		if current.has_method("can_grid_step_from_cell"):
+			var navigation_mode := str(current.get("navigation_mode"))
+			var navigation_map = current.get("navigation_map")
+			if navigation_mode == "grid_cardinal" and navigation_map != null:
+				return true
+		current = current.get_parent()
+	return false
+
+
+func _matches_lower_side_condition(actor_root: Node2D) -> bool:
 	match direction:
 		"south":
-			return actor_root.global_position.y < global_position.y
-		"west":
-			return actor_root.global_position.x > global_position.x
-		"east":
-			return actor_root.global_position.x < global_position.x
-		"north":
 			return actor_root.global_position.y > global_position.y
+		"west":
+			return actor_root.global_position.x < global_position.x
+		"east":
+			return actor_root.global_position.x > global_position.x
+		"north":
+			return actor_root.global_position.y < global_position.y
 		_:
 			return false
 
 
-func _apply_actor_layer_for_current_side(actor_root: Node2D) -> void:
-	if _matches_upper_condition(actor_root):
+func _apply_actor_enter_layer(actor_root: Node2D) -> void:
+	if _matches_lower_side_condition(actor_root):
 		_apply_actor_layer(actor_root, upper_layer, upper_sorting_layer)
-	else:
+
+
+func _apply_actor_exit_layer(actor_root: Node2D) -> void:
+	if _matches_lower_side_condition(actor_root):
 		_apply_actor_layer(actor_root, lower_layer, lower_sorting_layer)
 
 

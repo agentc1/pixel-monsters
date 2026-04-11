@@ -7,6 +7,8 @@ const CainosSpriteColorAnimation2D := preload("res://addons/cainos_basic_importe
 const CainosRuntimeActor2D := preload("res://addons/cainos_basic_importer/runtime/cainos_runtime_actor_2d.gd")
 const CainosTopDownPlayerController2D := preload("res://addons/cainos_basic_importer/runtime/cainos_top_down_player_controller_2d.gd")
 const CainosRuntimePlayerBody2D := preload("res://addons/cainos_basic_importer/runtime/cainos_runtime_player_body_2d.gd")
+const CainosGridNavigationMap := preload("res://addons/cainos_basic_importer/runtime/cainos_grid_navigation_map.gd")
+const CainosGridNavigationOverlay2D := preload("res://addons/cainos_basic_importer/runtime/cainos_grid_navigation_overlay_2d.gd")
 const CainosImportedScenePreview := preload("res://addons/cainos_basic_importer/runtime/cainos_imported_scene_preview.gd")
 const CainosStairsTrigger2D := preload("res://addons/cainos_basic_importer/runtime/cainos_stairs_trigger_2d.gd")
 
@@ -21,14 +23,16 @@ const TEXTURE_FILTER_NEAREST := 1
 const STAIR_LOWER_Z_OFFSET := -1
 const STAIR_UPPER_Z_OFFSET := 50
 const FOREGROUND_OCCLUDER_Z_OFFSET := 50
-const BRIDGE_UNDERPASS_CARVE_OFFSET := Vector2(-64.0, -96.0)
-const BRIDGE_UNDERPASS_CARVE_SIZE := Vector2(128.0, 160.0)
+const BRIDGE_UNDERPASS_CARVE_OFFSET := Vector2(-64.0, -160.0)
+const BRIDGE_UNDERPASS_CARVE_SIZE := Vector2(128.0, 224.0)
 const STAIR_RUNTIME_CARVE_WIDTH := 96.0
-const STAIR_RUNTIME_CARVE_DEPTH := 128.0
-const STAIR_RUNTIME_WALKABLE_WIDTH := 96.0
+const STAIR_RUNTIME_CARVE_DEPTH := 224.0
+const STAIR_RUNTIME_WALKABLE_WIDTH := 32.0
 const STAIR_RUNTIME_WALKABLE_DEPTH := 224.0
-const RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE := Vector2(6.0, 6.0)
-const RUNTIME_ACTOR_COLLISION_LAYER_BIT := 1
+const RUNTIME_PLAYER_FOOTPRINT_SIZE := Vector2(30.0, 30.0)
+const RUNTIME_GRID_CELL_SIZE := 32.0
+const RUNTIME_GRID_ORIGIN := Vector2.ZERO
+const RUNTIME_ACTOR_COLLISION_LAYER_BIT := 8
 const RUNTIME_ELEVATION_COLLISION_BITS := {
 	"Layer 1": 1,
 	"Layer 2": 2,
@@ -1326,6 +1330,18 @@ func _generate_unity_scene_runtime(scene: Dictionary, raw_scene_path: String, pr
 	var scene_bounds := _compute_canvas_bounds(raw_instance)
 	var camera_marker := _primary_scene_camera_marker(scene)
 	_configure_unity_scene_runtime_camera(runtime_player, scene_bounds, camera_marker, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
+	if str(scene.get("name", "")) == "SC Demo":
+		var navigation_bounds := _runtime_grid_navigation_bounds(runtime_player, scene_bounds, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
+		runtime_player.set("grid_navigation_bounds", navigation_bounds)
+		var navigation_map := _build_unity_scene_navigation_map(scene, raw_instance as Node2D, runtime_player, navigation_bounds, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
+		var navigation_map_path := _active_output_root.path_join("navigation/%s_navigation_map.tres" % _sanitize_filename(str(scene.get("name", "SC Demo"))))
+		var navigation_save_err := _save_resource(navigation_map, navigation_map_path)
+		if navigation_save_err != OK:
+			root.free()
+			return {"ok": false, "error": "Could not save Unity runtime navigation map: %s" % navigation_map_path}
+		navigation_map.resource_path = navigation_map_path
+		runtime_player.set("navigation_map", navigation_map)
+		root.add_child(_build_unity_scene_navigation_overlay(navigation_bounds, navigation_map))
 
 	_assign_scene_owner(root, root)
 	var packed_scene := PackedScene.new()
@@ -1373,14 +1389,25 @@ func _build_unity_scene_runtime_player(scene: Dictionary, raw_scene_root: Node2D
 	runtime_player.name = "RuntimePlayer"
 	runtime_player.position = Vector2(player_info.get("spawn_position", Vector2.ZERO))
 	runtime_player.scale = Vector2(player_info.get("spawn_scale", Vector2.ONE))
-	runtime_player.collision_layer = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+	runtime_player.collision_layer = RUNTIME_ACTOR_COLLISION_LAYER_BIT | _runtime_elevation_collision_bit(player_layer_name)
 	runtime_player.collision_mask = _runtime_elevation_collision_bit(player_layer_name)
 	runtime_player.set_script(CainosRuntimePlayerBody2D)
 	runtime_player.set_meta("unity_runtime_player", true)
 	runtime_player.set_meta("cainos_runtime_elevation_body", true)
 	runtime_player.set_meta("cainos_runtime_collision_layer_name", player_layer_name)
 	runtime_player.set_meta("cainos_runtime_collision_mask", int(runtime_player.collision_mask))
-	runtime_player.set("walkable_regions_by_layer", _runtime_walkable_regions_by_layer(scene))
+	var walkable_regions_by_layer := _runtime_walkable_regions_by_layer(scene)
+	runtime_player.set("walkable_regions_by_layer", walkable_regions_by_layer)
+	if str(scene.get("name", "")) == "SC Demo":
+		var transition_edges := _runtime_grid_transition_edges(scene)
+		var collision_bypass_regions_by_layer := _runtime_collision_bypass_regions_by_layer(scene)
+		var blocked_cells_by_layer := _runtime_grid_blocked_cells_by_layer(scene, raw_scene_root)
+		runtime_player.set("navigation_mode", "grid_cardinal")
+		runtime_player.set("grid_cell_size", RUNTIME_GRID_CELL_SIZE)
+		runtime_player.set("grid_origin", RUNTIME_GRID_ORIGIN)
+		runtime_player.set("grid_transition_edges", transition_edges)
+		runtime_player.set("grid_collision_bypass_regions_by_layer", collision_bypass_regions_by_layer)
+		runtime_player.set("grid_blocked_cells_by_layer", blocked_cells_by_layer)
 
 	var player_root := player_instance as Node2D
 	player_root.position = Vector2.ZERO
@@ -1458,14 +1485,10 @@ func _clone_player_collision_to_runtime_player(player_root: Node2D, runtime_play
 		return {"ok": false, "error": "PF Player collider shape was missing for runtime scene generation."}
 	var wrapper_shape := CollisionShape2D.new()
 	wrapper_shape.name = "CollisionShape2D"
-	wrapper_shape.position = (source_owner as Node2D).position + source_shape_node.position
 	var duplicated_shape := source_shape_node.shape.duplicate(true)
 	if duplicated_shape is RectangleShape2D:
 		var rectangle_shape := duplicated_shape as RectangleShape2D
-		rectangle_shape.size = Vector2(
-			minf(rectangle_shape.size.x, RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE.x),
-			minf(rectangle_shape.size.y, RUNTIME_PLAYER_FOOTPRINT_MAX_SIZE.y)
-		)
+		rectangle_shape.size = RUNTIME_PLAYER_FOOTPRINT_SIZE
 	wrapper_shape.shape = duplicated_shape
 	wrapper_shape.set_meta("cainos_runtime_player_footprint", true)
 	runtime_player.add_child(wrapper_shape)
@@ -1503,8 +1526,9 @@ func _configure_unity_scene_runtime_collision_objects(node: Node) -> void:
 			collision_object.set_meta("cainos_runtime_trigger_collision", true)
 		else:
 			var layer_name := _runtime_collision_layer_name_for_node(collision_object)
-			collision_object.collision_layer = _runtime_elevation_collision_bit(layer_name)
-			collision_object.collision_mask = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+			var layer_bit := _runtime_elevation_collision_bit(layer_name)
+			collision_object.collision_layer = layer_bit
+			collision_object.collision_mask = layer_bit
 			collision_object.set_meta("cainos_runtime_collision_layer_name", layer_name)
 			collision_object.set_meta("cainos_runtime_collision_layer_bit", int(collision_object.collision_layer))
 	for child in node.get_children():
@@ -1580,7 +1604,7 @@ func _build_unity_scene_collision_root(scene: Dictionary, carve_rects_by_layer :
 		body.name = "%s Collision" % str(tilemap.get("name", "Tilemap"))
 		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
 		body.collision_layer = _runtime_elevation_collision_bit(layer_name)
-		body.collision_mask = RUNTIME_ACTOR_COLLISION_LAYER_BIT
+		body.collision_mask = _runtime_elevation_collision_bit(layer_name)
 		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
 		body.position = _unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU) + _unity_vector2_to_godot_px(collision.get("offset", Vector2.ZERO), DEFAULT_PPU)
 		body.set_meta("unity_layer_name", layer_name)
@@ -1661,14 +1685,15 @@ func _add_runtime_stair_opening_carve_rects(scene: Dictionary, carve_rects_by_la
 
 func _runtime_stair_opening_carve_rect(root_position: Vector2, source_prefab_path: String) -> Rect2:
 	var half_width := STAIR_RUNTIME_CARVE_WIDTH * 0.5
+	var half_depth := STAIR_RUNTIME_CARVE_DEPTH * 0.5
 	if source_prefab_path.contains("stairs s"):
-		return Rect2(root_position + Vector2(-half_width, -STAIR_RUNTIME_CARVE_DEPTH + 32.0), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
+		return Rect2(root_position + Vector2(-half_width, -half_depth), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
 	if source_prefab_path.contains("stairs n"):
-		return Rect2(root_position + Vector2(-half_width, -32.0), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
+		return Rect2(root_position + Vector2(-half_width, -half_depth), Vector2(STAIR_RUNTIME_CARVE_WIDTH, STAIR_RUNTIME_CARVE_DEPTH))
 	if source_prefab_path.contains("stairs w"):
-		return Rect2(root_position + Vector2(-32.0, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
+		return Rect2(root_position + Vector2(-half_depth, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
 	if source_prefab_path.contains("stairs e"):
-		return Rect2(root_position + Vector2(-STAIR_RUNTIME_CARVE_DEPTH + 32.0, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
+		return Rect2(root_position + Vector2(-half_depth, -half_width), Vector2(STAIR_RUNTIME_CARVE_DEPTH, STAIR_RUNTIME_CARVE_WIDTH))
 	return Rect2()
 
 
@@ -1677,7 +1702,7 @@ func _runtime_walkable_regions_by_layer(scene: Dictionary) -> Dictionary:
 	for tilemap_variant in scene.get("tilemaps", []):
 		var tilemap: Dictionary = tilemap_variant
 		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
-		if layer_name == "Layer 1" or not _tilemap_is_runtime_walkable_surface(tilemap):
+		if not _tilemap_is_runtime_walkable_surface(tilemap):
 			continue
 		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
 		var tilemap_origin := _unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU)
@@ -1688,6 +1713,340 @@ func _runtime_walkable_regions_by_layer(scene: Dictionary) -> Dictionary:
 		regions_by_layer[layer_name] = regions
 	_add_runtime_stair_walkable_regions(scene, regions_by_layer)
 	return regions_by_layer
+
+
+func _runtime_stair_walkable_regions_by_layer(scene: Dictionary) -> Dictionary:
+	var regions_by_layer := {}
+	_add_runtime_stair_walkable_regions(scene, regions_by_layer)
+	return regions_by_layer
+
+
+func _runtime_collision_bypass_regions_by_layer(scene: Dictionary) -> Dictionary:
+	var regions_by_layer := _runtime_stair_walkable_regions_by_layer(scene)
+	_add_runtime_bridge_underpass_bypass_regions(scene, regions_by_layer)
+	return regions_by_layer
+
+
+func _build_unity_scene_navigation_map(scene: Dictionary, raw_scene_root: Node2D, runtime_player: CharacterBody2D, navigation_bounds: Rect2i, spawn_position: Vector2) -> Resource:
+	var navigation_map := CainosGridNavigationMap.new()
+	navigation_map.set("grid_cell_size", RUNTIME_GRID_CELL_SIZE)
+	navigation_map.set("grid_origin", RUNTIME_GRID_ORIGIN)
+	navigation_map.set("bounds", navigation_bounds)
+	navigation_map.set("layer_names", ["Layer 1", "Layer 2", "Layer 3"])
+	navigation_map.set("transition_edges", Array(runtime_player.get("grid_transition_edges")).duplicate(true))
+
+	var walkable_regions_by_layer := Dictionary(runtime_player.get("walkable_regions_by_layer"))
+	var blocked_cells_by_layer := Dictionary(runtime_player.get("grid_blocked_cells_by_layer"))
+	var bypass_regions_by_layer := Dictionary(runtime_player.get("grid_collision_bypass_regions_by_layer"))
+	var transition_edges := Array(runtime_player.get("grid_transition_edges"))
+	var candidate_regions_by_layer := _runtime_merged_regions_by_layer(walkable_regions_by_layer, bypass_regions_by_layer)
+	var candidate_cells_by_layer := _runtime_navigation_candidate_cells_by_layer(candidate_regions_by_layer, navigation_bounds)
+	var spawn_layer := str(runtime_player.get("current_collision_layer_name"))
+	var spawn_cell := _runtime_grid_cell_for_position(spawn_position)
+	blocked_cells_by_layer = _runtime_grid_cells_without(blocked_cells_by_layer, spawn_layer, spawn_cell)
+	var spawn_candidates: Array = candidate_cells_by_layer.get(spawn_layer, [])
+	if not _runtime_grid_cell_array_has(spawn_candidates, spawn_cell):
+		spawn_candidates.append(spawn_cell)
+		candidate_cells_by_layer[spawn_layer] = spawn_candidates
+	for edge_variant in transition_edges:
+		if not (edge_variant is Dictionary):
+			continue
+		var edge: Dictionary = edge_variant
+		var from_layer := str(edge.get("from_layer", ""))
+		var from_cell := _runtime_grid_variant_to_cell(edge.get("from_cell", Vector2i.ZERO))
+		var to_layer := str(edge.get("to_layer", ""))
+		var to_cell := _runtime_grid_variant_to_cell(edge.get("to_cell", Vector2i.ZERO))
+		blocked_cells_by_layer = _runtime_grid_cells_without(blocked_cells_by_layer, from_layer, from_cell)
+		blocked_cells_by_layer = _runtime_grid_cells_without(blocked_cells_by_layer, to_layer, to_cell)
+		_runtime_add_grid_cell_to_layer(candidate_cells_by_layer, from_layer, from_cell)
+		_runtime_add_grid_cell_to_layer(candidate_cells_by_layer, to_layer, to_cell)
+	_runtime_apply_transition_endpoint_layer_exclusivity(candidate_cells_by_layer, transition_edges)
+	var blocking_rects_by_layer := _runtime_grid_blocking_rects_by_layer(scene, raw_scene_root)
+	var blocked_edges_by_layer := _runtime_grid_blocked_edges_by_layer(candidate_cells_by_layer, blocked_cells_by_layer, transition_edges, blocking_rects_by_layer, bypass_regions_by_layer)
+
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		navigation_map.call("set_walkable_cells", layer_name, Array(candidate_cells_by_layer.get(layer_name, [])))
+		navigation_map.call("set_blocked_cells", layer_name, Array(blocked_cells_by_layer.get(layer_name, [])))
+		navigation_map.call("set_blocked_edges", layer_name, Array(blocked_edges_by_layer.get(layer_name, [])))
+
+	var reachable_cells_by_layer := Dictionary(navigation_map.call("reachable_cells_from", spawn_layer, spawn_cell, 20000))
+	navigation_map.set("source_metadata", {
+		"kind": "imported_unity_scene_navigation",
+		"scene_name": str(scene.get("name", "")),
+		"scene_path": str(scene.get("path", "")),
+		"importer_version": IMPORTER_VERSION,
+		"inference": "walkable_surface_candidates_with_spawn_reachability_audit",
+		"spawn_layer": spawn_layer,
+		"spawn_cell": spawn_cell,
+		"candidate_cell_counts_by_layer": _runtime_navigation_cell_counts(candidate_cells_by_layer),
+		"reachable_cell_counts_by_layer": _runtime_navigation_cell_counts(reachable_cells_by_layer),
+	})
+	return navigation_map
+
+
+func _runtime_navigation_candidate_cells_by_layer(walkable_regions_by_layer: Dictionary, navigation_bounds: Rect2i) -> Dictionary:
+	var cells_by_layer := {}
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		var cells := []
+		var regions := Array(walkable_regions_by_layer.get(layer_name, []))
+		if regions.is_empty():
+			cells_by_layer[layer_name] = cells
+			continue
+		for cell_y in range(navigation_bounds.position.y, navigation_bounds.end.y):
+			for cell_x in range(navigation_bounds.position.x, navigation_bounds.end.x):
+				var cell := Vector2i(cell_x, cell_y)
+				if _runtime_is_walkable_position(_runtime_grid_position_for_cell(cell), regions, RUNTIME_PLAYER_FOOTPRINT_SIZE.x * 0.5):
+					cells.append(cell)
+		cells_by_layer[layer_name] = cells
+	return cells_by_layer
+
+
+func _runtime_navigation_cell_counts(cells_by_layer: Dictionary) -> Dictionary:
+	var counts := {}
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		counts[layer_name] = Array(cells_by_layer.get(layer_name, [])).size()
+	return counts
+
+
+func _runtime_merged_regions_by_layer(first_regions_by_layer: Dictionary, second_regions_by_layer: Dictionary) -> Dictionary:
+	var result := {}
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		var regions := []
+		regions.append_array(Array(first_regions_by_layer.get(layer_name, [])))
+		regions.append_array(Array(second_regions_by_layer.get(layer_name, [])))
+		result[layer_name] = regions
+	return result
+
+
+func _runtime_add_grid_cell_to_layer(cells_by_layer: Dictionary, layer_name: String, cell: Vector2i) -> void:
+	if layer_name.is_empty():
+		return
+	var cells: Array = cells_by_layer.get(layer_name, [])
+	if not _runtime_grid_cell_array_has(cells, cell):
+		cells.append(cell)
+	cells_by_layer[layer_name] = cells
+
+
+func _runtime_apply_transition_endpoint_layer_exclusivity(cells_by_layer: Dictionary, transition_edges: Array) -> void:
+	var endpoint_layers_by_cell := {}
+	for edge_variant in transition_edges:
+		if not (edge_variant is Dictionary):
+			continue
+		var edge: Dictionary = edge_variant
+		_runtime_add_transition_endpoint_owner(endpoint_layers_by_cell, str(edge.get("from_layer", "")), _runtime_grid_variant_to_cell(edge.get("from_cell", Vector2i.ZERO)))
+		_runtime_add_transition_endpoint_owner(endpoint_layers_by_cell, str(edge.get("to_layer", "")), _runtime_grid_variant_to_cell(edge.get("to_cell", Vector2i.ZERO)))
+	for cell_key_variant in endpoint_layers_by_cell.keys():
+		var cell_key := str(cell_key_variant)
+		var endpoint: Dictionary = endpoint_layers_by_cell[cell_key]
+		var cell: Vector2i = endpoint.get("cell", Vector2i.ZERO)
+		var owner_layers: Array = endpoint.get("layers", [])
+		for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+			if owner_layers.has(layer_name):
+				continue
+			_runtime_remove_grid_cell_from_layer(cells_by_layer, layer_name, cell)
+
+
+func _runtime_add_transition_endpoint_owner(endpoint_layers_by_cell: Dictionary, layer_name: String, cell: Vector2i) -> void:
+	if layer_name.is_empty():
+		return
+	var cell_key := _runtime_grid_cell_key(cell)
+	var endpoint: Dictionary = endpoint_layers_by_cell.get(cell_key, {"cell": cell, "layers": []})
+	var layers: Array = endpoint.get("layers", [])
+	if not layers.has(layer_name):
+		layers.append(layer_name)
+	endpoint["layers"] = layers
+	endpoint_layers_by_cell[cell_key] = endpoint
+
+
+func _runtime_remove_grid_cell_from_layer(cells_by_layer: Dictionary, layer_name: String, cell_to_remove: Vector2i) -> void:
+	var cells := []
+	for cell_variant in Array(cells_by_layer.get(layer_name, [])):
+		var cell := _runtime_grid_variant_to_cell(cell_variant)
+		if cell == cell_to_remove:
+			continue
+		cells.append(cell)
+	cells_by_layer[layer_name] = cells
+
+
+func _runtime_grid_position_for_cell(cell: Vector2i) -> Vector2:
+	return RUNTIME_GRID_ORIGIN + Vector2(cell) * RUNTIME_GRID_CELL_SIZE
+
+
+func _runtime_grid_blocking_rects_by_layer(scene: Dictionary, raw_scene_root: Node2D) -> Dictionary:
+	var rects_by_layer := {}
+	_collect_runtime_grid_blocking_rects(raw_scene_root, rects_by_layer)
+	_add_runtime_tilemap_grid_blocking_rects(scene, rects_by_layer)
+	return rects_by_layer
+
+
+func _collect_runtime_grid_blocking_rects(node: Node, rects_by_layer: Dictionary) -> void:
+	if node is CollisionObject2D and not (node is Area2D) and not _runtime_grid_blocker_excluded(node):
+		var collision_object := node as CollisionObject2D
+		var layer_name := _runtime_collision_layer_name_for_node(collision_object)
+		for rect_variant in _runtime_collision_object_global_rects(collision_object):
+			var rect: Rect2 = rect_variant
+			_append_runtime_grid_blocking_rect(rects_by_layer, layer_name, rect)
+	for child in node.get_children():
+		_collect_runtime_grid_blocking_rects(child, rects_by_layer)
+
+
+func _add_runtime_tilemap_grid_blocking_rects(scene: Dictionary, rects_by_layer: Dictionary) -> void:
+	var carve_rects_by_layer := _runtime_scene_carve_rects_by_layer(scene)
+	for tilemap_variant in scene.get("tilemaps", []):
+		var tilemap: Dictionary = tilemap_variant
+		if _tilemap_is_runtime_walkable_surface(tilemap):
+			continue
+		var collision: Dictionary = tilemap.get("collision", {})
+		if collision.is_empty() or not bool(collision.get("runtime_supported", false)):
+			continue
+		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
+		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
+		var tilemap_origin := (
+			_unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU)
+			+ _unity_vector2_to_godot_px(collision.get("offset", Vector2.ZERO), DEFAULT_PPU)
+		)
+		var local_carve_rects := _runtime_local_carve_rects_for_layer(layer_name, carve_rects_by_layer, tilemap_origin)
+		for rect_variant in _tile_collision_rect_runs(tilemap.get("cells", []), local_carve_rects):
+			var rect: Rect2 = rect_variant
+			_append_runtime_grid_blocking_rect(rects_by_layer, layer_name, Rect2(tilemap_origin + rect.position, rect.size))
+
+
+func _append_runtime_grid_blocking_rect(rects_by_layer: Dictionary, layer_name: String, rect: Rect2) -> void:
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	var rects: Array = rects_by_layer.get(layer_name, [])
+	rects.append(rect)
+	rects_by_layer[layer_name] = rects
+
+
+func _runtime_grid_blocked_edges_by_layer(walkable_cells_by_layer: Dictionary, blocked_cells_by_layer: Dictionary, transition_edges: Array, blocking_rects_by_layer: Dictionary, bypass_regions_by_layer: Dictionary) -> Dictionary:
+	var result := {}
+	var walkable_sets_by_layer := _runtime_grid_cell_sets_by_layer(walkable_cells_by_layer)
+	var blocked_sets_by_layer := _runtime_grid_cell_sets_by_layer(blocked_cells_by_layer)
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		var edge_keys := []
+		var walkable_cells := Array(walkable_cells_by_layer.get(layer_name, []))
+		var walkable_set: Dictionary = walkable_sets_by_layer.get(layer_name, {})
+		var blocked_set: Dictionary = blocked_sets_by_layer.get(layer_name, {})
+		for cell_variant in walkable_cells:
+			var from_cell := _runtime_grid_variant_to_cell(cell_variant)
+			if blocked_set.has(_runtime_grid_cell_key(from_cell)):
+				continue
+			for direction_name in ["north", "south", "east", "west"]:
+				if _runtime_grid_transition_edge_exists(transition_edges, layer_name, from_cell, direction_name):
+					continue
+				var to_cell := from_cell + _runtime_grid_direction_delta(direction_name)
+				var to_key := _runtime_grid_cell_key(to_cell)
+				if not walkable_set.has(to_key) or blocked_set.has(to_key):
+					continue
+				if _runtime_grid_edge_collides(from_cell, to_cell, layer_name, blocking_rects_by_layer, bypass_regions_by_layer):
+					edge_keys.append("%s:%s" % [_runtime_grid_cell_key(from_cell), direction_name])
+		edge_keys.sort()
+		result[layer_name] = edge_keys
+	return result
+
+
+func _runtime_grid_cell_sets_by_layer(cells_by_layer: Dictionary) -> Dictionary:
+	var result := {}
+	for layer_name in ["Layer 1", "Layer 2", "Layer 3"]:
+		var cell_set := {}
+		for cell_variant in Array(cells_by_layer.get(layer_name, [])):
+			var cell := _runtime_grid_variant_to_cell(cell_variant)
+			cell_set[_runtime_grid_cell_key(cell)] = true
+		result[layer_name] = cell_set
+	return result
+
+
+func _runtime_grid_cells_without(cells_by_layer: Dictionary, layer_name: String, cell_to_remove: Vector2i) -> Dictionary:
+	var result := {}
+	for layer_name_variant in cells_by_layer.keys():
+		var current_layer_name := str(layer_name_variant)
+		var cells := []
+		for cell_variant in Array(cells_by_layer.get(current_layer_name, [])):
+			var cell := _runtime_grid_variant_to_cell(cell_variant)
+			if current_layer_name == layer_name and cell == cell_to_remove:
+				continue
+			cells.append(cell)
+		result[current_layer_name] = cells
+	return result
+
+
+func _runtime_grid_transition_edge_exists(transition_edges: Array, from_layer: String, from_cell: Vector2i, direction_name: String) -> bool:
+	for edge_variant in transition_edges:
+		if not (edge_variant is Dictionary):
+			continue
+		var edge: Dictionary = edge_variant
+		if str(edge.get("from_layer", "")) != from_layer:
+			continue
+		if str(edge.get("direction", "")) != direction_name:
+			continue
+		if _runtime_grid_variant_to_cell(edge.get("from_cell", Vector2i.ZERO)) == from_cell:
+			return true
+	return false
+
+
+func _runtime_grid_edge_collides(from_cell: Vector2i, to_cell: Vector2i, layer_name: String, blocking_rects_by_layer: Dictionary, bypass_regions_by_layer: Dictionary) -> bool:
+	var from_position := _runtime_grid_position_for_cell(from_cell)
+	var to_position := _runtime_grid_position_for_cell(to_cell)
+	if _runtime_is_walkable_position(to_position, Array(bypass_regions_by_layer.get(layer_name, [])), RUNTIME_PLAYER_FOOTPRINT_SIZE.x * 0.5):
+		return false
+	var half_footprint := RUNTIME_PLAYER_FOOTPRINT_SIZE * 0.5
+	var min_point := Vector2(minf(from_position.x, to_position.x), minf(from_position.y, to_position.y)) - half_footprint
+	var max_point := Vector2(maxf(from_position.x, to_position.x), maxf(from_position.y, to_position.y)) + half_footprint
+	var sweep_rect := Rect2(min_point, max_point - min_point)
+	for rect_variant in Array(blocking_rects_by_layer.get(layer_name, [])):
+		var rect: Rect2 = rect_variant
+		if sweep_rect.intersects(rect):
+			return true
+	return false
+
+
+func _runtime_is_walkable_position(point: Vector2, regions: Array, footprint_radius := 15.0) -> bool:
+	if regions.is_empty():
+		return false
+	for sample_point in [
+		point,
+		point + Vector2(footprint_radius, 0.0),
+		point + Vector2(-footprint_radius, 0.0),
+		point + Vector2(0.0, footprint_radius),
+		point + Vector2(0.0, -footprint_radius),
+	]:
+		if not _runtime_is_walkable_point(sample_point, regions):
+			return false
+	return true
+
+
+func _runtime_is_walkable_point(point: Vector2, regions: Array) -> bool:
+	for region_variant in regions:
+		var region: Rect2 = region_variant
+		if region.has_point(point):
+			return true
+	return false
+
+
+func _runtime_grid_cell_key(cell: Vector2i) -> String:
+	return "%d,%d" % [cell.x, cell.y]
+
+
+func _runtime_grid_cell_array_has(cells: Array, expected_cell: Vector2i) -> bool:
+	for cell_variant in cells:
+		if _runtime_grid_variant_to_cell(cell_variant) == expected_cell:
+			return true
+	return false
+
+
+func _add_runtime_bridge_underpass_bypass_regions(scene: Dictionary, regions_by_layer: Dictionary) -> void:
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
+		if not source_prefab_path.contains("/pf struct - gate"):
+			continue
+		var layer_name := str(instance.get("layer_name", "Layer 1"))
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
+		var regions: Array = regions_by_layer.get(layer_name, [])
+		regions.append(Rect2(root_position + BRIDGE_UNDERPASS_CARVE_OFFSET, BRIDGE_UNDERPASS_CARVE_SIZE))
+		regions_by_layer[layer_name] = regions
 
 
 func _tilemap_is_runtime_walkable_surface(tilemap: Dictionary) -> bool:
@@ -1709,22 +2068,383 @@ func _add_runtime_stair_walkable_regions(scene: Dictionary, regions_by_layer: Di
 		var upper_layer_name := _next_runtime_layer_name(base_layer_name)
 		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
 		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
-		var walkable_rect := _runtime_stair_walkable_rect(root_position, source_prefab_path)
-		if walkable_rect.size.x <= 0.0 or walkable_rect.size.y <= 0.0:
-			continue
 		var regions: Array = regions_by_layer.get(upper_layer_name, [])
-		regions.append(walkable_rect)
+		for walkable_rect_variant in _runtime_stair_walkable_regions(root_position, source_prefab_path):
+			var walkable_rect: Rect2 = walkable_rect_variant
+			if walkable_rect.size.x <= 0.0 or walkable_rect.size.y <= 0.0:
+				continue
+			regions.append(walkable_rect)
 		regions_by_layer[upper_layer_name] = regions
+
+
+func _runtime_stair_walkable_regions(root_position: Vector2, source_prefab_path: String) -> Array:
+	if source_prefab_path.contains("stairs s") or source_prefab_path.contains("stairs n"):
+		return [_runtime_stair_walkable_rect(root_position, source_prefab_path)]
+	if source_prefab_path.contains("stairs w") or source_prefab_path.contains("stairs e"):
+		var lower_side_direction := _runtime_stair_direction_from_path(source_prefab_path)
+		var lower_side_delta := _runtime_grid_direction_delta(lower_side_direction)
+		if lower_side_delta == Vector2i.ZERO:
+			return []
+		var center_cell := _runtime_grid_cell_for_position(root_position)
+		var half_depth_cells := ceili((STAIR_RUNTIME_WALKABLE_DEPTH * 0.5) / RUNTIME_GRID_CELL_SIZE)
+		var lower_cell := center_cell + lower_side_delta * half_depth_cells
+		var upper_cell := lower_cell - lower_side_delta
+		return [_runtime_grid_cell_support_rect(upper_cell)]
+	return []
 
 
 func _runtime_stair_walkable_rect(root_position: Vector2, source_prefab_path: String) -> Rect2:
 	var half_width := STAIR_RUNTIME_WALKABLE_WIDTH * 0.5
-	var half_depth := STAIR_RUNTIME_WALKABLE_DEPTH * 0.5
 	if source_prefab_path.contains("stairs s") or source_prefab_path.contains("stairs n"):
+		var half_depth := STAIR_RUNTIME_WALKABLE_DEPTH * 0.5
 		return Rect2(root_position + Vector2(-half_width, -half_depth), Vector2(STAIR_RUNTIME_WALKABLE_WIDTH, STAIR_RUNTIME_WALKABLE_DEPTH))
-	if source_prefab_path.contains("stairs w") or source_prefab_path.contains("stairs e"):
-		return Rect2(root_position + Vector2(-half_depth, -half_width), Vector2(STAIR_RUNTIME_WALKABLE_DEPTH, STAIR_RUNTIME_WALKABLE_WIDTH))
 	return Rect2()
+
+
+func _runtime_grid_cell_support_rect(cell: Vector2i) -> Rect2:
+	var center := Vector2(cell) * RUNTIME_GRID_CELL_SIZE
+	var half_size := Vector2(RUNTIME_GRID_CELL_SIZE * 0.5, RUNTIME_GRID_CELL_SIZE * 0.5)
+	return Rect2(center - half_size, half_size * 2.0)
+
+
+func _runtime_grid_blocked_cells_by_layer(scene: Dictionary, raw_scene_root: Node) -> Dictionary:
+	var blocked_cell_sets_by_layer := {}
+	_collect_runtime_grid_blocked_cells(raw_scene_root, blocked_cell_sets_by_layer)
+	_add_runtime_tilemap_grid_blocked_cells(scene, blocked_cell_sets_by_layer)
+	return _runtime_grid_blocked_cell_sets_to_arrays(blocked_cell_sets_by_layer)
+
+
+func _runtime_grid_blocked_cell_sets_to_arrays(blocked_cell_sets_by_layer: Dictionary) -> Dictionary:
+	var result := {}
+	for layer_name_variant in blocked_cell_sets_by_layer.keys():
+		var layer_name := str(layer_name_variant)
+		var blocked_cell_set: Dictionary = blocked_cell_sets_by_layer.get(layer_name, {})
+		var keys := blocked_cell_set.keys()
+		keys.sort()
+		var cells := []
+		for key_variant in keys:
+			cells.append(blocked_cell_set.get(key_variant))
+		result[layer_name] = cells
+	return result
+
+
+func _add_runtime_tilemap_grid_blocked_cells(scene: Dictionary, blocked_cell_sets_by_layer: Dictionary) -> void:
+	var carve_rects_by_layer := _runtime_scene_carve_rects_by_layer(scene)
+	for tilemap_variant in scene.get("tilemaps", []):
+		var tilemap: Dictionary = tilemap_variant
+		if _tilemap_is_runtime_walkable_surface(tilemap):
+			continue
+		var collision: Dictionary = tilemap.get("collision", {})
+		if collision.is_empty() or not bool(collision.get("runtime_supported", false)):
+			continue
+		var layer_name := str(tilemap.get("layer_name", "Layer 1"))
+		var tilemap_global_position: Vector3 = tilemap.get("global_position", Vector3.ZERO)
+		var tilemap_origin := (
+			_unity_vector2_to_godot_px(Vector2(tilemap_global_position.x, tilemap_global_position.y), DEFAULT_PPU)
+			+ _unity_vector2_to_godot_px(collision.get("offset", Vector2.ZERO), DEFAULT_PPU)
+		)
+		var local_carve_rects := _runtime_local_carve_rects_for_layer(layer_name, carve_rects_by_layer, tilemap_origin)
+		for rect_variant in _tile_collision_rect_runs(tilemap.get("cells", []), local_carve_rects):
+			var rect: Rect2 = rect_variant
+			_add_runtime_grid_blocked_rect(blocked_cell_sets_by_layer, layer_name, Rect2(tilemap_origin + rect.position, rect.size))
+
+
+func _collect_runtime_grid_blocked_cells(node: Node, blocked_cell_sets_by_layer: Dictionary) -> void:
+	if node is CollisionObject2D and not (node is Area2D) and not (node is RigidBody2D) and not _runtime_grid_blocker_excluded(node):
+		var collision_object := node as CollisionObject2D
+		var layer_name := _runtime_collision_layer_name_for_node(collision_object)
+		for rect_variant in _runtime_collision_object_global_rects(collision_object):
+			var rect: Rect2 = rect_variant
+			_add_runtime_grid_blocked_rect(blocked_cell_sets_by_layer, layer_name, rect)
+	for child in node.get_children():
+		_collect_runtime_grid_blocked_cells(child, blocked_cell_sets_by_layer)
+
+
+func _runtime_grid_blocker_excluded(node: Node) -> bool:
+	var source_prefab_path := _nearest_meta_string(node, "unity_source_prefab").to_lower()
+	return (
+		source_prefab_path.contains("/pf struct - stairs")
+		or source_prefab_path.contains("/pf struct - gate")
+		or source_prefab_path.contains("/pf props - wooden gate")
+	)
+
+
+func _runtime_collision_object_global_rects(collision_object: CollisionObject2D) -> Array:
+	var rects := []
+	_collect_runtime_collision_global_rects(collision_object, rects)
+	return rects
+
+
+func _collect_runtime_collision_global_rects(node: Node, rects: Array) -> void:
+	if node is CollisionShape2D:
+		var shape_node := node as CollisionShape2D
+		if not shape_node.disabled and shape_node.shape != null:
+			var shape_rect := _runtime_collision_shape_global_rect(shape_node)
+			if shape_rect.size.x > 0.0 and shape_rect.size.y > 0.0:
+				rects.append(shape_rect)
+	elif node is CollisionPolygon2D:
+		var polygon_node := node as CollisionPolygon2D
+		if not polygon_node.disabled:
+			var polygon_rect := _runtime_collision_polygon_global_rect(polygon_node)
+			if polygon_rect.size.x > 0.0 and polygon_rect.size.y > 0.0:
+				rects.append(polygon_rect)
+	for child in node.get_children():
+		_collect_runtime_collision_global_rects(child, rects)
+
+
+func _runtime_collision_shape_global_rect(shape_node: CollisionShape2D) -> Rect2:
+	var shape := shape_node.shape
+	if shape is RectangleShape2D:
+		var rectangle_shape := shape as RectangleShape2D
+		return _runtime_transform_rect(shape_node.global_transform, Rect2(-rectangle_shape.size * 0.5, rectangle_shape.size))
+	if shape is SegmentShape2D:
+		var segment_shape := shape as SegmentShape2D
+		return _runtime_rect_from_points([
+			shape_node.to_global(segment_shape.a),
+			shape_node.to_global(segment_shape.b),
+		]).grow(1.0)
+	return Rect2()
+
+
+func _runtime_collision_polygon_global_rect(polygon_node: CollisionPolygon2D) -> Rect2:
+	var points := []
+	for point in polygon_node.polygon:
+		points.append(polygon_node.to_global(point))
+	return _runtime_rect_from_points(points)
+
+
+func _runtime_transform_rect(transform_2d: Transform2D, rect: Rect2) -> Rect2:
+	return _runtime_rect_from_points([
+		transform_2d * rect.position,
+		transform_2d * Vector2(rect.end.x, rect.position.y),
+		transform_2d * rect.end,
+		transform_2d * Vector2(rect.position.x, rect.end.y),
+	])
+
+
+func _runtime_rect_from_points(points: Array) -> Rect2:
+	if points.is_empty():
+		return Rect2()
+	var first_point: Vector2 = points[0]
+	var min_x := first_point.x
+	var max_x := first_point.x
+	var min_y := first_point.y
+	var max_y := first_point.y
+	for point_variant in points:
+		var point: Vector2 = point_variant
+		min_x = minf(min_x, point.x)
+		max_x = maxf(max_x, point.x)
+		min_y = minf(min_y, point.y)
+		max_y = maxf(max_y, point.y)
+	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
+
+
+func _add_runtime_grid_blocked_rect(blocked_cell_sets_by_layer: Dictionary, layer_name: String, rect: Rect2) -> void:
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	var half_cell := RUNTIME_GRID_CELL_SIZE * 0.5
+	var epsilon := 0.001
+	var min_cell_x := floori((rect.position.x + half_cell) / RUNTIME_GRID_CELL_SIZE)
+	var max_cell_x := floori((rect.end.x + half_cell - epsilon) / RUNTIME_GRID_CELL_SIZE)
+	var min_cell_y := floori((rect.position.y + half_cell) / RUNTIME_GRID_CELL_SIZE)
+	var max_cell_y := floori((rect.end.y + half_cell - epsilon) / RUNTIME_GRID_CELL_SIZE)
+	var layer_set: Dictionary = blocked_cell_sets_by_layer.get(layer_name, {})
+	for cell_y in range(min_cell_y, max_cell_y + 1):
+		for cell_x in range(min_cell_x, max_cell_x + 1):
+			var cell := Vector2i(cell_x, cell_y)
+			layer_set["%d,%d" % [cell_x, cell_y]] = cell
+	blocked_cell_sets_by_layer[layer_name] = layer_set
+
+
+func _runtime_grid_transition_edges(scene: Dictionary) -> Array:
+	var edges := []
+	for instance_variant in scene.get("prefab_instances", []):
+		var instance: Dictionary = instance_variant
+		var source_prefab_path := str(instance.get("source_prefab_path", "")).to_lower()
+		if not source_prefab_path.contains("/pf struct - stairs"):
+			continue
+		var lower_side_direction := _runtime_stair_direction_from_path(source_prefab_path)
+		if lower_side_direction.is_empty():
+			continue
+		var base_layer_name := str(instance.get("layer_name", "Layer 1"))
+		if base_layer_name == "Layer 3":
+			continue
+		var upper_layer_name := _next_runtime_layer_name(base_layer_name)
+		var local_position: Vector3 = instance.get("local_position", Vector3.ZERO)
+		var root_position := _unity_vector2_to_godot_px(Vector2(local_position.x, local_position.y), DEFAULT_PPU)
+		_append_runtime_stair_grid_edges(
+			edges,
+			base_layer_name,
+			upper_layer_name,
+			root_position,
+			lower_side_direction,
+			str(instance.get("source_prefab_path", ""))
+		)
+	return edges
+
+
+func _append_runtime_stair_grid_edges(edges: Array, base_layer_name: String, upper_layer_name: String, root_position: Vector2, lower_side_direction: String, source_prefab_path: String) -> void:
+	var center_cell := _runtime_grid_cell_for_position(root_position)
+	var lower_side_delta := _runtime_grid_direction_delta(lower_side_direction)
+	if lower_side_delta == Vector2i.ZERO:
+		return
+	var half_depth_cells := ceili((STAIR_RUNTIME_WALKABLE_DEPTH * 0.5) / RUNTIME_GRID_CELL_SIZE)
+	var lower_cell := center_cell + lower_side_delta * half_depth_cells
+	var upper_cell := lower_cell - lower_side_delta
+	var enter_direction := _runtime_grid_direction_name(-lower_side_delta)
+	var exit_direction := _runtime_grid_direction_name(lower_side_delta)
+	edges.append({
+		"kind": "stairs",
+		"source_prefab_path": source_prefab_path,
+		"from_layer": base_layer_name,
+		"from_cell": lower_cell,
+		"direction": enter_direction,
+		"to_layer": upper_layer_name,
+		"to_cell": upper_cell,
+	})
+	edges.append({
+		"kind": "stairs",
+		"source_prefab_path": source_prefab_path,
+		"from_layer": upper_layer_name,
+		"from_cell": upper_cell,
+		"direction": exit_direction,
+		"to_layer": base_layer_name,
+		"to_cell": lower_cell,
+	})
+
+
+func _runtime_stair_direction_from_path(source_prefab_path: String) -> String:
+	if source_prefab_path.contains("stairs s"):
+		return "south"
+	if source_prefab_path.contains("stairs n"):
+		return "north"
+	if source_prefab_path.contains("stairs w"):
+		return "west"
+	if source_prefab_path.contains("stairs e"):
+		return "east"
+	return ""
+
+
+func _runtime_grid_cell_for_position(point: Vector2) -> Vector2i:
+	return Vector2i(
+		roundi((point.x - RUNTIME_GRID_ORIGIN.x) / RUNTIME_GRID_CELL_SIZE),
+		roundi((point.y - RUNTIME_GRID_ORIGIN.y) / RUNTIME_GRID_CELL_SIZE)
+	)
+
+
+func _runtime_grid_direction_delta(direction_name: String) -> Vector2i:
+	match direction_name:
+		"north":
+			return Vector2i(0, -1)
+		"south":
+			return Vector2i(0, 1)
+		"east":
+			return Vector2i(1, 0)
+		"west":
+			return Vector2i(-1, 0)
+		_:
+			return Vector2i.ZERO
+
+
+func _runtime_grid_direction_name(delta: Vector2i) -> String:
+	if delta == Vector2i(0, -1):
+		return "north"
+	if delta == Vector2i(0, 1):
+		return "south"
+	if delta == Vector2i(1, 0):
+		return "east"
+	if delta == Vector2i(-1, 0):
+		return "west"
+	return ""
+
+
+func _build_unity_scene_navigation_overlay(navigation_bounds: Rect2i, navigation_map: Resource = null) -> Node2D:
+	var overlay := Node2D.new()
+	overlay.name = "NavigationOverlay"
+	overlay.set_script(CainosGridNavigationOverlay2D)
+	overlay.set("player_path", NodePath("../RuntimePlayer"))
+	overlay.set("navigation_map", navigation_map)
+	overlay.set("navigation_bounds", navigation_bounds)
+	overlay.visible = true
+	overlay.set_meta("cainos_grid_navigation_overlay", true)
+	return overlay
+
+
+func _runtime_grid_navigation_bounds(runtime_player: CharacterBody2D, scene_bounds: Rect2, spawn_position: Vector2) -> Rect2i:
+	var accumulator := {
+		"has_bounds": false,
+		"min": Vector2i.ZERO,
+		"max": Vector2i.ZERO,
+	}
+	if scene_bounds.size.x > 0.0 and scene_bounds.size.y > 0.0:
+		_expand_runtime_grid_bounds_point(accumulator, scene_bounds.position)
+		_expand_runtime_grid_bounds_point(accumulator, scene_bounds.end)
+	_expand_runtime_grid_bounds_point(accumulator, spawn_position)
+	_expand_runtime_grid_bounds_regions(accumulator, Dictionary(runtime_player.get("walkable_regions_by_layer")))
+	_expand_runtime_grid_bounds_regions(accumulator, Dictionary(runtime_player.get("grid_collision_bypass_regions_by_layer")))
+	_expand_runtime_grid_bounds_cells(accumulator, Dictionary(runtime_player.get("grid_blocked_cells_by_layer")))
+	for edge_variant in Array(runtime_player.get("grid_transition_edges")):
+		if not (edge_variant is Dictionary):
+			continue
+		var edge: Dictionary = edge_variant
+		_expand_runtime_grid_bounds_cell(accumulator, _runtime_grid_variant_to_cell(edge.get("from_cell", Vector2i.ZERO)))
+		_expand_runtime_grid_bounds_cell(accumulator, _runtime_grid_variant_to_cell(edge.get("to_cell", Vector2i.ZERO)))
+	if not bool(accumulator.get("has_bounds", false)):
+		var spawn_cell := _runtime_grid_cell_for_position(spawn_position)
+		return Rect2i(spawn_cell - Vector2i(20, 20), Vector2i(41, 41))
+	var min_cell: Vector2i = accumulator.get("min", Vector2i.ZERO)
+	var max_cell: Vector2i = accumulator.get("max", Vector2i.ZERO)
+	min_cell -= Vector2i.ONE
+	max_cell += Vector2i.ONE
+	return Rect2i(min_cell, max_cell - min_cell + Vector2i.ONE)
+
+
+func _expand_runtime_grid_bounds_regions(accumulator: Dictionary, regions_by_layer: Dictionary) -> void:
+	for layer_name_variant in regions_by_layer.keys():
+		for rect_variant in Array(regions_by_layer.get(layer_name_variant, [])):
+			var rect: Rect2 = rect_variant
+			if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+				continue
+			_expand_runtime_grid_bounds_point(accumulator, rect.position)
+			_expand_runtime_grid_bounds_point(accumulator, rect.end)
+
+
+func _expand_runtime_grid_bounds_cells(accumulator: Dictionary, cells_by_layer: Dictionary) -> void:
+	for layer_name_variant in cells_by_layer.keys():
+		for cell_variant in Array(cells_by_layer.get(layer_name_variant, [])):
+			_expand_runtime_grid_bounds_cell(accumulator, _runtime_grid_variant_to_cell(cell_variant))
+
+
+func _expand_runtime_grid_bounds_point(accumulator: Dictionary, point: Vector2) -> void:
+	_expand_runtime_grid_bounds_cell(accumulator, _runtime_grid_cell_for_position(point))
+
+
+func _expand_runtime_grid_bounds_cell(accumulator: Dictionary, cell: Vector2i) -> void:
+	if not bool(accumulator.get("has_bounds", false)):
+		accumulator["has_bounds"] = true
+		accumulator["min"] = cell
+		accumulator["max"] = cell
+		return
+	var min_cell: Vector2i = accumulator.get("min", cell)
+	var max_cell: Vector2i = accumulator.get("max", cell)
+	accumulator["min"] = Vector2i(mini(min_cell.x, cell.x), mini(min_cell.y, cell.y))
+	accumulator["max"] = Vector2i(maxi(max_cell.x, cell.x), maxi(max_cell.y, cell.y))
+
+
+func _runtime_grid_variant_to_cell(value) -> Vector2i:
+	if value is Vector2i:
+		return value
+	if value is Vector2:
+		var vector_value: Vector2 = value
+		return Vector2i(roundi(vector_value.x), roundi(vector_value.y))
+	if value is Dictionary:
+		var dict_value: Dictionary = value
+		return Vector2i(int(dict_value.get("x", 0)), int(dict_value.get("y", 0)))
+	if value is Array:
+		var array_value: Array = value
+		if array_value.size() >= 2:
+			return Vector2i(int(array_value[0]), int(array_value[1]))
+	return Vector2i.ZERO
 
 
 func _runtime_local_carve_rects_for_layer(layer_name: String, carve_rects_by_layer: Dictionary, collision_body_position: Vector2) -> Array:
@@ -2435,7 +3155,7 @@ func _apply_stairs_visual_strata(root_node: Node2D, direction: String) -> void:
 		_:
 			for child in root_node.get_children():
 				if child is Node and _has_descendant_sprite(child):
-					_set_visual_stratum(child, "upper", STAIR_UPPER_Z_OFFSET)
+					_set_visual_stratum(child, "lower", STAIR_LOWER_Z_OFFSET)
 
 
 func _set_visual_stratum(node: Node, stratum: String, z_offset: int) -> void:

@@ -119,6 +119,28 @@ class GodotBridgeSession:
     async def node_info(self, node_path: str) -> dict[str, Any]:
         return await self.call("node_info", {"node_path": node_path})
 
+    async def set_node_property(self, node_path: str, property_name: str, value: Any, *, frames_after: int = 1) -> dict[str, Any]:
+        return await self.call(
+            "set_node_property",
+            {
+                "node_path": node_path,
+                "property_name": property_name,
+                "value": value,
+                "frames_after": max(0, frames_after),
+            },
+        )
+
+    async def call_node_method(self, node_path: str, method_name: str, args: list[Any], *, frames_after: int = 1) -> dict[str, Any]:
+        return await self.call(
+            "call_node_method",
+            {
+                "node_path": node_path,
+                "method_name": method_name,
+                "args": args,
+                "frames_after": max(0, frames_after),
+            },
+        )
+
     async def press_keys(self, keys: list[str], *, hold_ms: int = 120, frames_after: int = 2) -> dict[str, Any]:
         return await self.call("press_keys", {"keys": keys, "hold_ms": hold_ms, "frames_after": frames_after})
 

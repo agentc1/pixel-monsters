@@ -3,7 +3,7 @@ extends Node
 const GROUP_NAME := "cainos_runtime_actor_helpers"
 const SENSOR_NAME := "CainosRuntimeSensor2D"
 const SENSOR_INSTANCE_ID_META := "cainos_runtime_actor_instance_id"
-const ACTOR_COLLISION_LAYER_BIT := 1
+const ACTOR_COLLISION_LAYER_BIT := 8
 const LAYER_BASE_Z := {
 	"Layer 1": 0,
 	"Layer 2": 100,
@@ -162,7 +162,7 @@ func _apply_runtime_physics_layer(actor_root: Node2D, layer_name: String) -> voi
 	var body := _find_runtime_elevation_body(actor_root)
 	if body == null:
 		return
-	body.collision_layer = ACTOR_COLLISION_LAYER_BIT
+	body.collision_layer = ACTOR_COLLISION_LAYER_BIT | _layer_collision_bit(layer_name)
 	body.collision_mask = _layer_collision_bit(layer_name)
 	body.set_meta("cainos_runtime_collision_layer_name", layer_name)
 	body.set_meta("cainos_runtime_collision_mask", int(body.collision_mask))

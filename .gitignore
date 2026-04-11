@@ -6,6 +6,7 @@
 /local_inputs/
 /godot_project/.godot/
 /godot_project/cainos_imports/
+/godot_project/tmp/
 __pycache__/
 *.pyc
 *.pyo

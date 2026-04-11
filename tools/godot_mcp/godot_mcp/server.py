@@ -88,6 +88,24 @@ async def godot_node_info(node_path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def godot_set_node_property(node_path: str, property_name: str, value: Any, frames_after: int = 1) -> dict[str, Any]:
+    """Set a runtime node property, then advance a small number of frames."""
+    try:
+        return _ok(await session.set_node_property(node_path, property_name, value, frames_after=frames_after))
+    except Exception as exc:  # pragma: no cover
+        return _err(exc)
+
+
+@mcp.tool()
+async def godot_call_node_method(node_path: str, method_name: str, args: list[Any] | None = None, frames_after: int = 1) -> dict[str, Any]:
+    """Call a runtime node method, then advance a small number of frames."""
+    try:
+        return _ok(await session.call_node_method(node_path, method_name, args or [], frames_after=frames_after))
+    except Exception as exc:  # pragma: no cover
+        return _err(exc)
+
+
+@mcp.tool()
 async def godot_capture_viewport(label: str = "capture") -> dict[str, Any]:
     """Capture the active viewport to a PNG on disk and return its metadata."""
     try:

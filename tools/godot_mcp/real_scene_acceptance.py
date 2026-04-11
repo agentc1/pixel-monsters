@@ -39,6 +39,7 @@ RUNTIME_COLLISION_ROOT = f"{RUNTIME_SCENE_ROOT}/SceneCollision"
 RUNTIME_PLAYER_PATH = f"{RUNTIME_SCENE_ROOT}/RuntimePlayer"
 RUNTIME_PLAYER_CHILD_PATH = f"{RUNTIME_PLAYER_PATH}/PF Player"
 RUNTIME_CAMERA_PATH = f"{RUNTIME_PLAYER_PATH}/FollowCamera2D"
+RUNTIME_NAVIGATION_OVERLAY_PATH = f"{RUNTIME_SCENE_ROOT}/NavigationOverlay"
 PREVIEW_SCENE_ROOT = "/root/GodotMcpRuntime/SceneHost/sc_demo_preview"
 PREVIEW_INSTANCE_ROOT = f"{PREVIEW_SCENE_ROOT}/SceneInstance/SC Demo"
 ALL_PROPS_SCENE_ROOT = "/root/GodotMcpRuntime/SceneHost/SC All Props"
@@ -233,6 +234,27 @@ async def main() -> None:
             assert runtime_root["found"], runtime_root
             assert runtime_root["node"]["type"] == "Node2D", runtime_root
 
+            runtime_overlay = _structured(await session.call_tool("godot_node_info", {"node_path": RUNTIME_NAVIGATION_OVERLAY_PATH}))
+            assert runtime_overlay["found"], runtime_overlay
+            assert runtime_overlay["node"]["type"] == "Node2D", runtime_overlay
+            assert runtime_overlay["node"]["visible"] is True, runtime_overlay
+            assert str(runtime_overlay["node"]["script_path"]).endswith("cainos_grid_navigation_overlay_2d.gd"), runtime_overlay
+            overlay_rebuild = _structured(
+                await session.call_tool(
+                    "godot_call_node_method",
+                    {
+                        "node_path": RUNTIME_NAVIGATION_OVERLAY_PATH,
+                        "method_name": "rebuild_navigation_overlay",
+                        "frames_after": 2,
+                    },
+                )
+            )
+            assert overlay_rebuild["called"], overlay_rebuild
+            assert overlay_rebuild["result"]["ok"] is True, overlay_rebuild
+            overlay_counts = overlay_rebuild["result"]["reachable_cell_counts_by_layer"]
+            assert int(overlay_counts["Layer 1"]) > 0, overlay_rebuild
+            assert int(overlay_counts["Layer 2"]) > 0, overlay_rebuild
+
             runtime_scene_instance = _structured(
                 await session.call_tool("godot_node_info", {"node_path": f"{RUNTIME_SCENE_ROOT}/SceneInstance"})
             )
@@ -268,19 +290,19 @@ async def main() -> None:
             assert runtime_capture_before["captured"], runtime_capture_before
             assert Path(runtime_capture_before["png_path"]).exists(), runtime_capture_before
 
-            before_player_x = float(runtime_player_before["node"]["global_position"]["x"])
-            before_camera_x = float(runtime_camera_before["node"]["global_position"]["x"])
-            _structured(await session.call_tool("godot_press_keys", {"keys": ["D"], "hold_ms": 250, "frames_after": 4}))
+            before_player_y = float(runtime_player_before["node"]["global_position"]["y"])
+            before_camera_y = float(runtime_camera_before["node"]["global_position"]["y"])
+            _structured(await session.call_tool("godot_press_keys", {"keys": ["W"], "hold_ms": 250, "frames_after": 4}))
 
             runtime_player_after = _structured(await session.call_tool("godot_node_info", {"node_path": RUNTIME_PLAYER_PATH}))
             assert runtime_player_after["found"], runtime_player_after
-            after_player_x = float(runtime_player_after["node"]["global_position"]["x"])
-            assert after_player_x > before_player_x, (runtime_player_before, runtime_player_after)
+            after_player_y = float(runtime_player_after["node"]["global_position"]["y"])
+            assert after_player_y < before_player_y, (runtime_player_before, runtime_player_after)
 
             runtime_camera_after = _structured(await session.call_tool("godot_node_info", {"node_path": RUNTIME_CAMERA_PATH}))
             assert runtime_camera_after["found"], runtime_camera_after
-            after_camera_x = float(runtime_camera_after["node"]["global_position"]["x"])
-            assert after_camera_x > before_camera_x, (runtime_camera_before, runtime_camera_after)
+            after_camera_y = float(runtime_camera_after["node"]["global_position"]["y"])
+            assert after_camera_y < before_camera_y, (runtime_camera_before, runtime_camera_after)
 
             runtime_capture_after = _structured(await session.call_tool("godot_capture_viewport", {"label": "scene_demo_runtime_after"}))
             assert runtime_capture_after["captured"], runtime_capture_after

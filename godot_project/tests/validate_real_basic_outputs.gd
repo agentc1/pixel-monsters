@@ -155,9 +155,19 @@ func _validate_imported_unity_scene_runtime(scene_path: String) -> void:
 	var scene_instance := instance.get_node_or_null("SceneInstance")
 	var scene_collision := instance.get_node_or_null("SceneCollision")
 	var runtime_player := instance.get_node_or_null("RuntimePlayer")
+	var navigation_overlay := instance.get_node_or_null("NavigationOverlay")
 	_assert_true(scene_instance is Node2D, "Imported SC Demo runtime includes SceneInstance")
 	_assert_true(scene_collision is Node2D, "Imported SC Demo runtime includes SceneCollision")
 	_assert_true(runtime_player is CharacterBody2D, "Imported SC Demo runtime includes CharacterBody2D RuntimePlayer")
+	_assert_true(navigation_overlay is Node2D, "Imported SC Demo runtime includes grid navigation overlay")
+	if navigation_overlay is Node2D:
+		_assert_true(_script_path(navigation_overlay).ends_with("cainos_grid_navigation_overlay_2d.gd"), "Imported SC Demo runtime navigation overlay uses debug overlay script")
+		_assert_true(navigation_overlay.get("navigation_bounds") is Rect2i, "Imported SC Demo runtime navigation overlay stores grid bounds")
+		var overlay_navigation_map = navigation_overlay.get("navigation_map")
+		_assert_true(overlay_navigation_map is Resource, "Imported SC Demo runtime navigation overlay references generated navigation map resource")
+		if overlay_navigation_map is Resource:
+			_assert_true(str((overlay_navigation_map as Resource).resource_path).ends_with("navigation/SC Demo_navigation_map.tres"), "Imported SC Demo runtime navigation overlay uses external navigation map resource")
+		_assert_true((navigation_overlay as CanvasItem).visible, "Imported SC Demo runtime navigation overlay is visible by default")
 	if scene_instance is Node:
 		_assert_true(scene_instance.get_node_or_null("SC Demo") is Node2D, "Imported SC Demo runtime instances raw SC Demo scene")
 		_assert_true(scene_instance.get_node_or_null("SC Demo/Prefabs/PF Player") == null, "Imported SC Demo runtime removes placeholder PF Player")
@@ -176,8 +186,20 @@ func _validate_imported_unity_scene_runtime(scene_path: String) -> void:
 		if runtime_player is CharacterBody2D:
 			_assert_true(_script_path(runtime_player).ends_with("cainos_runtime_player_body_2d.gd"), "Imported SC Demo runtime uses runtime player body script")
 			_assert_vector2_close((runtime_player as CharacterBody2D).position, Vector2(186.24, -73.92), "Imported SC Demo runtime player spawn position")
-			_assert_eq((runtime_player as CharacterBody2D).collision_layer, 1, "Imported SC Demo runtime player remains on trigger-detectable actor layer")
+			_assert_eq(str(runtime_player.get("navigation_mode")), "grid_cardinal", "Imported SC Demo runtime enables grid-cardinal navigation")
+			_assert_float_close(float(runtime_player.get("grid_cell_size")), 32.0, "Imported SC Demo runtime uses 32px grid cells")
+			_assert_true(Array(runtime_player.get("grid_transition_edges")).size() > 0, "Imported SC Demo runtime includes grid transition edges")
+			_assert_true(runtime_player.get("grid_navigation_bounds") is Rect2i, "Imported SC Demo runtime exposes grid navigation bounds")
+			var navigation_map = runtime_player.get("navigation_map")
+			_assert_true(navigation_map is Resource, "Imported SC Demo runtime player references generated navigation map resource")
+			if navigation_map is Resource:
+				_assert_true(str((navigation_map as Resource).resource_path).ends_with("navigation/SC Demo_navigation_map.tres"), "Imported SC Demo runtime player uses external navigation map resource")
+				_assert_true(bool((navigation_map as Resource).call("is_cell_navigable", Vector2i(6, -2), "Layer 1")), "Imported SC Demo navigation map includes player spawn cell")
+				var reachable_from_spawn: Dictionary = (navigation_map as Resource).call("reachable_cells_from", "Layer 1", Vector2i(6, -2), 20000)
+				_assert_true(not _cell_array_has_cell(reachable_from_spawn.get("Layer 1", []), Vector2i(1, -15)), "Imported SC Demo navigation map keeps unreachable Layer 1 island cells outside spawn reachability")
+			_assert_eq((runtime_player as CharacterBody2D).collision_layer, 9, "Imported SC Demo runtime player remains trigger-detectable on Layer 1")
 			_assert_eq((runtime_player as CharacterBody2D).collision_mask, 1, "Imported SC Demo runtime player starts colliding with Layer 1 geometry")
+			_assert_true(Dictionary(runtime_player.get("grid_blocked_cells_by_layer")).has("Layer 2"), "Imported SC Demo runtime exposes Layer 2 grid blockers")
 			_assert_true(runtime_player.get_node_or_null("PF Player") is Node2D, "Imported SC Demo runtime keeps imported PF Player child")
 			_assert_true(runtime_player.get_node_or_null("FollowCamera2D") is Camera2D, "Imported SC Demo runtime includes live follow camera")
 			var player_root := runtime_player.get_node_or_null("PF Player")
@@ -187,6 +209,7 @@ func _validate_imported_unity_scene_runtime(scene_path: String) -> void:
 				var helper := player_root.get_node_or_null("CainosRuntimeActor2D")
 				if helper != null and helper.has_method("apply_runtime_layer"):
 					helper.call("apply_runtime_layer", "Layer 2", "Layer 2")
+					_assert_eq((runtime_player as CharacterBody2D).collision_layer, 10, "Imported SC Demo runtime player remains trigger-detectable on Layer 2")
 					_assert_eq((runtime_player as CharacterBody2D).collision_mask, 2, "Imported SC Demo runtime player switches to Layer 2 geometry with runtime layer")
 			var wrapper_collision := _first_collision_shape(runtime_player)
 			_assert_true(wrapper_collision != null, "Imported SC Demo runtime wrapper clones player collision shape")
@@ -386,7 +409,8 @@ func _validate_stairs_prefab(output_root: String) -> void:
 		_assert_true(behaviour_node.has_meta("unity_mono_behaviours"), "Stairs prefab preserves deferred MonoBehaviour metadata")
 		_assert_true(not _behavior_hints_for(behaviour_node, "stairs_layer_trigger").is_empty(), "Stairs trigger node keeps local behavior hint")
 		_assert_true(_script_path(behaviour_node).ends_with("cainos_stairs_trigger_2d.gd"), "Stairs trigger node uses runtime stairs script")
-		_assert_true(_count_nodes_with_meta_value(root, "cainos_visual_stratum", "upper") > 0, "South stairs assign upper visual strata")
+		_assert_true(_count_nodes_with_meta_value(root, "cainos_visual_stratum", "lower") > 0, "South stairs assign lower visual strata")
+		_assert_eq(_count_nodes_with_meta_value(root, "cainos_visual_stratum", "upper"), 0, "South stairs do not foreground-occlude the lower approach")
 		var trigger_position := Vector2.ZERO
 		if behaviour_node is Node2D:
 			trigger_position = (behaviour_node as Node2D).global_position
@@ -394,7 +418,7 @@ func _validate_stairs_prefab(output_root: String) -> void:
 		if player_root != null:
 			_assert_true(_find_runtime_actor_helper(player_root) != null, "PF Player includes runtime actor helper")
 			var base_z := _first_sprite_base_z(player_root)
-			player_root.position = trigger_position + Vector2(0, -16)
+			player_root.position = trigger_position + Vector2(0, 16)
 			behaviour_node.call("apply_enter_for_actor", player_root)
 			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 2", "South stairs runtime enter promotes PF Player to Layer 2")
 			_assert_eq(_first_sprite_z(player_root), base_z + 100, "South stairs runtime enter raises PF Player z")
@@ -405,6 +429,11 @@ func _validate_stairs_prefab(output_root: String) -> void:
 			behaviour_node.call("apply_exit_for_actor", player_root)
 			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 1", "South stairs runtime exit restores PF Player to Layer 1 from lower side")
 			_assert_eq(_first_sprite_z(player_root), base_z, "South stairs runtime exit restores PF Player z from lower side")
+			player_root.position = trigger_position + Vector2(0, -16)
+			behaviour_node.call("apply_enter_for_actor", player_root)
+			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 1", "South stairs runtime enter keeps PF Player on Layer 1 from upper side")
+			behaviour_node.call("apply_exit_for_actor", player_root)
+			_assert_eq(str(player_root.get_meta("cainos_runtime_layer_name", "")), "Layer 1", "South stairs runtime exit keeps PF Player on Layer 1 from upper side")
 			player_root.free()
 	root.free()
 
@@ -995,6 +1024,35 @@ func _assert_collision_layer_if_present(root: Node, node_path: String, expected_
 	_assert_true(node is CollisionObject2D, "%s node is collision object" % message)
 	if node is CollisionObject2D:
 		_assert_eq((node as CollisionObject2D).collision_layer, expected_layer, message)
+
+
+func _cell_array_has_cell(cells, expected_cell: Vector2i) -> bool:
+	if not (cells is Array):
+		return false
+	for cell_variant in cells:
+		if _variant_to_cell(cell_variant) == expected_cell:
+			return true
+	return false
+
+
+func _variant_to_cell(value) -> Vector2i:
+	if value is Vector2i:
+		return value
+	if value is Vector2:
+		var vector_value: Vector2 = value
+		return Vector2i(roundi(vector_value.x), roundi(vector_value.y))
+	if value is Dictionary:
+		var dict_value: Dictionary = value
+		return Vector2i(int(dict_value.get("x", 0)), int(dict_value.get("y", 0)))
+	if value is Array:
+		var array_value: Array = value
+		if array_value.size() >= 2:
+			return Vector2i(int(array_value[0]), int(array_value[1]))
+	if value is String:
+		var parts := str(value).split(",", false)
+		if parts.size() == 2:
+			return Vector2i(int(parts[0]), int(parts[1]))
+	return Vector2i.ZERO
 
 
 func _assert_true(condition: bool, message: String) -> void:

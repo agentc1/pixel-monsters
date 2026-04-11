@@ -80,6 +80,10 @@ func _handle_request(request: Dictionary) -> Dictionary:
 			return _response_ok(request_id, _scene_tree_payload(params))
 		"node_info":
 			return _response_ok(request_id, _node_info_payload(params))
+		"set_node_property":
+			return _response_ok(request_id, await _set_node_property_payload(params))
+		"call_node_method":
+			return _response_ok(request_id, await _call_node_method_payload(params))
 		"capture_viewport":
 			return _response_ok(request_id, await _capture_viewport_payload(params))
 		"press_keys":
@@ -155,6 +159,54 @@ func _node_info_payload(params: Dictionary) -> Dictionary:
 		}
 	return {
 		"found": true,
+		"node": _serialize_node(node),
+	}
+
+
+func _set_node_property_payload(params: Dictionary) -> Dictionary:
+	var node_path := str(params.get("node_path", ""))
+	var property_name := str(params.get("property_name", ""))
+	var node := get_node_or_null(node_path)
+	if node == null:
+		return {
+			"set": false,
+			"found": false,
+			"node_path": node_path,
+		}
+	if property_name.is_empty():
+		return {"set": false, "found": true, "error": "property_name is required"}
+	node.set(property_name, _variant_from_json(params.get("value")))
+	await _await_frames(int(params.get("frames_after", 1)))
+	return {
+		"set": true,
+		"found": true,
+		"node": _serialize_node(node),
+	}
+
+
+func _call_node_method_payload(params: Dictionary) -> Dictionary:
+	var node_path := str(params.get("node_path", ""))
+	var method_name := str(params.get("method_name", ""))
+	var node := get_node_or_null(node_path)
+	if node == null:
+		return {
+			"called": false,
+			"found": false,
+			"node_path": node_path,
+		}
+	if method_name.is_empty():
+		return {"called": false, "found": true, "error": "method_name is required"}
+	if not node.has_method(method_name):
+		return {"called": false, "found": true, "error": "Node has no method: %s" % method_name}
+	var args: Array = []
+	for arg_variant in params.get("args", []):
+		args.append(_variant_from_json(arg_variant))
+	var result: Variant = node.callv(method_name, args)
+	await _await_frames(int(params.get("frames_after", 1)))
+	return {
+		"called": true,
+		"found": true,
+		"result": _jsonify_variant(result),
 		"node": _serialize_node(node),
 	}
 
@@ -358,6 +410,26 @@ func _jsonify_variant(value: Variant) -> Variant:
 			return packed
 		_:
 			return str(value)
+
+
+func _variant_from_json(value: Variant) -> Variant:
+	match typeof(value):
+		TYPE_DICTIONARY:
+			var dictionary: Dictionary = value
+			if dictionary.has("x") and dictionary.has("y") and dictionary.size() <= 2:
+				return Vector2(float(dictionary.get("x", 0.0)), float(dictionary.get("y", 0.0)))
+			var result := {}
+			for key_variant in dictionary.keys():
+				result[str(key_variant)] = _variant_from_json(dictionary[key_variant])
+			return result
+		TYPE_ARRAY:
+			var array_value: Array = value
+			var result_array := []
+			for item in array_value:
+				result_array.append(_variant_from_json(item))
+			return result_array
+		_:
+			return value
 
 
 func _vector_payload(vector: Vector2) -> Dictionary:
