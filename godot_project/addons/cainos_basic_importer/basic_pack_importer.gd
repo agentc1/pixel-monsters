@@ -30,6 +30,9 @@ const STAIR_RUNTIME_CARVE_WIDTH := 96.0
 const STAIR_RUNTIME_CARVE_DEPTH := 224.0
 const STAIR_RUNTIME_WALKABLE_WIDTH := 32.0
 const STAIR_RUNTIME_WALKABLE_DEPTH := 224.0
+const STAIR_RUNTIME_HORIZONTAL_TRIGGER_OFFSET_X := 69.0
+const STAIR_RUNTIME_HORIZONTAL_TRIGGER_OFFSET_Y := 29.0
+const STAIR_RUNTIME_HORIZONTAL_GRID_BIAS := Vector2i(-1, 0)
 const RUNTIME_PLAYER_FOOTPRINT_SIZE := Vector2(30.0, 30.0)
 const RUNTIME_GRID_CELL_SIZE := 32.0
 const RUNTIME_GRID_ORIGIN := Vector2.ZERO
@@ -1783,6 +1786,7 @@ func _build_unity_scene_navigation_map(scene: Dictionary, raw_scene_root: Node2D
 		_runtime_add_grid_cell_to_layer(candidate_cells_by_layer, from_layer, from_cell)
 		_runtime_add_grid_cell_to_layer(candidate_cells_by_layer, to_layer, to_cell)
 	_runtime_apply_transition_endpoint_layer_exclusivity(candidate_cells_by_layer, transition_edges)
+	_runtime_apply_horizontal_stair_gate_cells(candidate_cells_by_layer, blocked_cells_by_layer, transition_edges)
 	var blocking_rects_by_layer := _runtime_grid_blocking_rects_by_layer(scene, raw_scene_root)
 	var blocked_edges_by_layer := _runtime_grid_blocked_edges_by_layer(candidate_cells_by_layer, blocked_cells_by_layer, transition_edges, blocking_rects_by_layer, bypass_regions_by_layer)
 
@@ -1868,6 +1872,34 @@ func _runtime_apply_transition_endpoint_layer_exclusivity(cells_by_layer: Dictio
 			_runtime_remove_grid_cell_from_layer(cells_by_layer, layer_name, cell)
 
 
+func _runtime_apply_horizontal_stair_gate_cells(cells_by_layer: Dictionary, blocked_cells_by_layer: Dictionary, transition_edges: Array) -> void:
+	for edge_variant in transition_edges:
+		if not (edge_variant is Dictionary):
+			continue
+		var edge: Dictionary = edge_variant
+		if str(edge.get("movement_kind", "")) != "diagonal_stair_waypoint":
+			continue
+		var enter_direction := str(edge.get("direction", ""))
+		if enter_direction != "east" and enter_direction != "west":
+			continue
+		var lower_layer := str(edge.get("from_layer", ""))
+		var upper_layer := str(edge.get("to_layer", ""))
+		if _runtime_layer_index(lower_layer) >= _runtime_layer_index(upper_layer):
+			continue
+		var lower_cell := _runtime_grid_variant_to_cell(edge.get("from_cell", Vector2i.ZERO))
+		var upper_cell := _runtime_grid_variant_to_cell(edge.get("to_cell", Vector2i.ZERO))
+		var lower_side_delta := -_runtime_grid_direction_delta(enter_direction)
+		var lower_side_peer_cell := Vector2i(lower_cell.x, upper_cell.y)
+		var upper_side_peer_cell := Vector2i(upper_cell.x, lower_cell.y)
+		for cell in [upper_cell, lower_side_peer_cell, upper_side_peer_cell]:
+			if cell != lower_cell:
+				_runtime_add_grid_blocked_cell_to_layer(blocked_cells_by_layer, lower_layer, cell)
+		for cell in [lower_cell, lower_side_peer_cell, upper_side_peer_cell]:
+			if cell != upper_cell:
+				_runtime_add_grid_blocked_cell_to_layer(blocked_cells_by_layer, upper_layer, cell)
+		_runtime_add_grid_cell_to_layer(cells_by_layer, upper_layer, upper_cell - lower_side_delta)
+
+
 func _runtime_add_transition_endpoint_owner(endpoint_layers_by_cell: Dictionary, layer_name: String, cell: Vector2i) -> void:
 	if layer_name.is_empty():
 		return
@@ -1888,6 +1920,27 @@ func _runtime_remove_grid_cell_from_layer(cells_by_layer: Dictionary, layer_name
 			continue
 		cells.append(cell)
 	cells_by_layer[layer_name] = cells
+
+
+func _runtime_add_grid_blocked_cell_to_layer(blocked_cells_by_layer: Dictionary, layer_name: String, cell: Vector2i) -> void:
+	if layer_name.is_empty():
+		return
+	var cells: Array = blocked_cells_by_layer.get(layer_name, [])
+	if not _runtime_grid_cell_array_has(cells, cell):
+		cells.append(cell)
+	blocked_cells_by_layer[layer_name] = cells
+
+
+func _runtime_layer_index(layer_name: String) -> int:
+	match layer_name:
+		"Layer 1":
+			return 1
+		"Layer 2":
+			return 2
+		"Layer 3":
+			return 3
+		_:
+			return 0
 
 
 func _runtime_grid_position_for_cell(cell: Vector2i) -> Vector2:
@@ -2315,7 +2368,16 @@ func _append_runtime_stair_grid_edges(edges: Array, base_layer_name: String, upp
 	var upper_cell := lower_cell - lower_side_delta
 	var uses_diagonal_waypoint := lower_side_direction == "east" or lower_side_direction == "west"
 	if uses_diagonal_waypoint:
+		var trigger_offset := Vector2(
+			STAIR_RUNTIME_HORIZONTAL_TRIGGER_OFFSET_X * float(lower_side_delta.x),
+			STAIR_RUNTIME_HORIZONTAL_TRIGGER_OFFSET_Y
+		)
+		var trigger_cell := _runtime_grid_cell_for_position(root_position + trigger_offset)
+		lower_cell = trigger_cell + lower_side_delta
+		upper_cell = lower_cell - lower_side_delta
 		upper_cell += Vector2i(0, -1)
+		lower_cell += STAIR_RUNTIME_HORIZONTAL_GRID_BIAS
+		upper_cell += STAIR_RUNTIME_HORIZONTAL_GRID_BIAS
 	var enter_direction := _runtime_grid_direction_name(-lower_side_delta)
 	var exit_direction := _runtime_grid_direction_name(lower_side_delta)
 	var enter_edge := {
@@ -2502,7 +2564,7 @@ func _runtime_command_legend_text() -> String:
 		"Move: WASD or arrow keys. One tap moves one 32x32 tile.",
 		"Navigation overlay: 1 / 2 / 3 toggle Layer 1 amber, Layer 2 cyan, and Layer 3 magenta.",
 		"Edit mode: N toggles editing and transfers WASD / arrow keys to the opaque layer-colored cursor. Q / E switch the edit layer. G snaps it to the player.",
-		"Overrides: Insert force-navigable, Delete force-blocked, C clears. Edits affect only the active layer; Switch layers with Q / E for stacked cells. V saves overrides.",
+		"Overrides: Insert force-navigable, Delete force-blocked, C clears. Edits affect only the active layer; Switch layers with Q / E for stacked cells. V or Ctrl+S saves overrides. Ctrl+B bakes overrides into the base navigation map. Ctrl+Q quits.",
 		"Use the overlays as the navigation source of truth, then save designer corrections into the generated override resource.",
 	]
 	return "\n".join(lines)

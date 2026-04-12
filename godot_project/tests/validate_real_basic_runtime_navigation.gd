@@ -119,7 +119,8 @@ func _validate_command_legend(scene: Node) -> void:
 	_assert_true(text.contains("Delete force-blocked"), "Runtime command legend documents Delete force-blocked override")
 	_assert_true(text.contains("Edits affect only the active layer"), "Runtime command legend documents active-layer-only overrides")
 	_assert_true(text.contains("Switch layers with Q / E"), "Runtime command legend documents repeated stacked-cell edits")
-	_assert_true(text.contains("V saves overrides"), "Runtime command legend documents saving overrides")
+	_assert_true(text.contains("V or Ctrl+S saves overrides"), "Runtime command legend documents saving overrides")
+	_assert_true(text.contains("Ctrl+B bakes overrides"), "Runtime command legend documents baking overrides")
 	var command_legend_hud := scene.get_node_or_null("CommandLegendHUD") as CanvasLayer
 	_assert_true(command_legend_hud != null, "Runtime scene includes visible command legend HUD")
 	if command_legend_hud == null:
@@ -147,9 +148,9 @@ func _validate_transition_endpoint_exclusivity(navigation_map: Resource, transit
 		for layer_name in LAYER_NAMES:
 			if owner_layers.has(layer_name):
 				continue
-			if bool(navigation_map.call("is_cell_walkable", cell, layer_name)):
+			if bool(navigation_map.call("is_cell_navigable", cell, layer_name)):
 				leaks.append("%s:%s" % [layer_name, str(cell)])
-	_assert_true(leaks.is_empty(), "Runtime navigation map keeps stair transition endpoint cells layer-exclusive")
+	_assert_true(leaks.is_empty(), "Runtime navigation map keeps stair transition endpoint cells navigable only on owner layers")
 
 
 func _add_endpoint_owner(endpoint_layers_by_cell: Dictionary, layer_name: String, cell: Vector2i) -> void:

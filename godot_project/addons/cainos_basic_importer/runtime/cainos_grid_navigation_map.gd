@@ -367,6 +367,80 @@ func save_navigation_overrides() -> Dictionary:
 	}
 
 
+func bake_navigation_overrides(save_after := true, clear_after := true) -> Dictionary:
+	if not _has_override_resource():
+		return {"ok": false, "error": "Navigation override resource is not attached."}
+
+	var counts := override_counts_by_layer()
+	var force_navigable_count := 0
+	var force_blocked_count := 0
+	for layer_name in layer_names:
+		var layer_counts: Dictionary = counts.get(layer_name, {})
+		force_navigable_count += int(layer_counts.get(OVERRIDE_FORCE_NAVIGABLE, 0))
+		force_blocked_count += int(layer_counts.get(OVERRIDE_FORCE_BLOCKED, 0))
+	var total_count := force_navigable_count + force_blocked_count
+	if total_count == 0:
+		return {
+			"ok": true,
+			"baked": false,
+			"message": "No navigation overrides to bake.",
+			"counts_by_layer": counts,
+			"force_navigable_count": 0,
+			"force_blocked_count": 0,
+		}
+
+	for layer_name in layer_names:
+		var walkable_cells := _cells_from_keys(walkable_cells_by_layer.get(layer_name, []))
+		var blocked_cells := _cells_from_keys(blocked_cells_by_layer.get(layer_name, []))
+		for cell_variant in forced_navigable_cells_for_layer(layer_name):
+			var cell := variant_to_cell(cell_variant)
+			_add_cell_to_array(walkable_cells, cell)
+			_remove_cell_from_array(blocked_cells, cell)
+		for cell_variant in forced_blocked_cells_for_layer(layer_name):
+			var cell := variant_to_cell(cell_variant)
+			_remove_cell_from_array(walkable_cells, cell)
+			_add_cell_to_array(blocked_cells, cell)
+		set_walkable_cells(layer_name, walkable_cells)
+		set_blocked_cells(layer_name, blocked_cells)
+
+	var clear_result := {"ok": true}
+	if clear_after:
+		if navigation_overrides.has_method("clear_all_overrides"):
+			clear_result = Dictionary(navigation_overrides.call("clear_all_overrides"))
+		else:
+			clear_result = _clear_overrides_cell_by_cell()
+		if not bool(clear_result.get("ok", false)):
+			return {
+				"ok": false,
+				"error": "Failed to clear navigation overrides after baking.",
+				"clear_result": clear_result,
+			}
+
+	var map_path := str(resource_path)
+	var override_path := _override_resource_path()
+	var map_error := OK
+	var override_error := OK
+	if save_after:
+		if map_path.is_empty():
+			return {"ok": false, "error": "Navigation map resource has no save path."}
+		map_error = ResourceSaver.save(self, map_path)
+		if clear_after and not override_path.is_empty():
+			override_error = ResourceSaver.save(navigation_overrides, override_path)
+
+	return {
+		"ok": map_error == OK and override_error == OK,
+		"baked": map_error == OK and override_error == OK,
+		"map_error_code": map_error,
+		"override_error_code": override_error,
+		"map_path": map_path,
+		"override_path": override_path,
+		"cleared_overrides": clear_after,
+		"counts_by_layer": counts,
+		"force_navigable_count": force_navigable_count,
+		"force_blocked_count": force_blocked_count,
+	}
+
+
 func edge_key(from_cell: Vector2i, direction_name: String) -> String:
 	return _edge_key(from_cell, direction_name)
 
@@ -500,6 +574,11 @@ func _remove_cell_from_array(cells: Array, expected_cell: Vector2i) -> void:
 		index -= 1
 
 
+func _add_cell_to_array(cells: Array, cell: Vector2i) -> void:
+	if not _cell_array_has(cells, cell):
+		cells.append(cell)
+
+
 func _subtract_cell_arrays(cells: Array, cells_to_remove: Array) -> Array:
 	var result := []
 	for cell_variant in cells:
@@ -580,6 +659,18 @@ func _transition_debug_status(from_layer: String, to_layer: String, from_navigab
 
 func _has_override_resource() -> bool:
 	return navigation_overrides is Resource and navigation_overrides.has_method("cell_override_state")
+
+
+func _clear_overrides_cell_by_cell() -> Dictionary:
+	for layer_name in layer_names:
+		var cells_to_clear := []
+		for cell_variant in forced_navigable_cells_for_layer(layer_name):
+			_add_cell_to_array(cells_to_clear, variant_to_cell(cell_variant))
+		for cell_variant in forced_blocked_cells_for_layer(layer_name):
+			_add_cell_to_array(cells_to_clear, variant_to_cell(cell_variant))
+		for cell_variant in cells_to_clear:
+			navigation_overrides.call("clear_cell_override", layer_name, variant_to_cell(cell_variant))
+	return {"ok": true}
 
 
 func _cell_override_state(layer_name: String, cell: Vector2i) -> String:

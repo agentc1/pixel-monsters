@@ -24,6 +24,7 @@ const OVERRIDE_FORCE_BLOCKED := "force_blocked"
 @export var forced_navigable_outline_color := Color(1.0, 0.95, 0.0, 0.9)
 @export var forced_blocked_color := Color(1.0, 0.05, 0.0, 0.72)
 @export var edit_cursor_color := Color(1.0, 0.48, 0.0, 1.0)
+@export var show_edit_status_hud := true
 
 var _reachable_cells_by_layer := {}
 var _map_cells_by_layer := {}
@@ -32,6 +33,10 @@ var _forced_blocked_cells_by_layer := {}
 var _transition_cells_by_layer := {}
 var _grid_origin := Vector2.ZERO
 var _grid_cell_size := 32.0
+var _overrides_dirty := false
+var _last_edit_status := "Navigation edits have not changed in this session."
+var _status_canvas: CanvasLayer
+var _status_label: Label
 
 
 func _ready() -> void:
@@ -39,6 +44,7 @@ func _ready() -> void:
 	set_process_unhandled_input(true)
 	z_as_relative = false
 	z_index = 4096
+	_ensure_status_hud()
 	_publish_visibility_metadata()
 	call_deferred("rebuild_navigation_overlay")
 
@@ -49,11 +55,27 @@ func _unhandled_input(event: InputEvent) -> void:
 	var key_event := event as InputEventKey
 	if not key_event.pressed or key_event.echo:
 		return
+	var keycode := _keycode_for_event(key_event)
+	if key_event.ctrl_pressed and not key_event.alt_pressed and not key_event.meta_pressed and keycode == KEY_Q:
+		get_viewport().set_input_as_handled()
+		get_tree().quit(0)
+		return
+	if key_event.ctrl_pressed and not key_event.alt_pressed and not key_event.meta_pressed and keycode == KEY_S:
+		_save_navigation_overrides_with_feedback()
+		get_viewport().set_input_as_handled()
+		return
+	if key_event.ctrl_pressed and not key_event.alt_pressed and not key_event.meta_pressed and keycode == KEY_B:
+		_bake_navigation_overrides_with_feedback()
+		get_viewport().set_input_as_handled()
+		return
 	if key_event.ctrl_pressed or key_event.alt_pressed or key_event.meta_pressed:
 		return
-	var keycode := _keycode_for_event(key_event)
 	if keycode == KEY_N:
 		toggle_navigation_edit_mode()
+		get_viewport().set_input_as_handled()
+		return
+	if keycode == KEY_V:
+		_save_navigation_overrides_with_feedback()
 		get_viewport().set_input_as_handled()
 		return
 	if edit_mode_enabled and _handle_edit_key(key_event):
@@ -172,6 +194,9 @@ func set_navigation_edit_mode(is_enabled: bool) -> Dictionary:
 	_set_player_movement_input_suppressed(edit_mode_enabled)
 	if edit_mode_enabled:
 		snap_edit_cursor_to_player()
+		_last_edit_status = "Edit mode on. Cursor snapped to player."
+	else:
+		_last_edit_status = "Edit mode off. Press V or Ctrl+S to save overrides."
 	_publish_edit_metadata()
 	queue_redraw()
 	return edit_state()
@@ -193,6 +218,7 @@ func set_edit_layer(layer_name: String) -> Dictionary:
 	if normalized.is_empty():
 		return {"ok": false, "error": "Unknown navigation layer: %s" % layer_name}
 	edit_layer_name = normalized
+	_last_edit_status = "Editing %s." % edit_layer_name
 	_publish_edit_metadata()
 	queue_redraw()
 	return edit_state()
@@ -200,6 +226,7 @@ func set_edit_layer(layer_name: String) -> Dictionary:
 
 func set_edit_cursor_cell(cell_variant) -> Dictionary:
 	edit_cursor_cell = _variant_to_cell(cell_variant)
+	_last_edit_status = "Edit cursor moved to %s." % _cell_key(edit_layer_name, edit_cursor_cell)
 	_publish_edit_metadata()
 	queue_redraw()
 	return edit_state()
@@ -215,6 +242,7 @@ func snap_edit_cursor_to_player() -> Dictionary:
 	else:
 		edit_cursor_cell = player.call("grid_cell_for_position", (player as Node2D).global_position) as Vector2i
 	edit_layer_name = str(player.get("current_collision_layer_name"))
+	_last_edit_status = "Cursor snapped to player on %s %s." % [edit_layer_name, _cell_label(edit_cursor_cell)]
 	_publish_edit_metadata()
 	queue_redraw()
 	return edit_state()
@@ -228,6 +256,12 @@ func set_cell_override(layer_name: String, cell_variant, state: String) -> Dicti
 		return {"ok": false, "error": "Runtime navigation map does not support overrides."}
 	var result := Dictionary(active_map.call("set_cell_override", layer_name, _variant_to_cell(cell_variant), state))
 	if bool(result.get("ok", false)):
+		_overrides_dirty = true
+		_last_edit_status = "%s %s set to %s. Unsaved." % [
+			str(result.get("layer", layer_name)),
+			_cell_label(_variant_to_cell(cell_variant)),
+			str(result.get("state", state)),
+		]
 		rebuild_navigation_overlay()
 	return result
 
@@ -240,6 +274,11 @@ func clear_cell_override(layer_name: String, cell_variant) -> Dictionary:
 		return {"ok": false, "error": "Runtime navigation map does not support overrides."}
 	var result := Dictionary(active_map.call("clear_cell_override", layer_name, _variant_to_cell(cell_variant)))
 	if bool(result.get("ok", false)):
+		_overrides_dirty = true
+		_last_edit_status = "%s %s override cleared. Unsaved." % [
+			str(result.get("layer", layer_name)),
+			_cell_label(_variant_to_cell(cell_variant)),
+		]
 		rebuild_navigation_overlay()
 	return result
 
@@ -264,7 +303,23 @@ func save_navigation_overrides() -> Dictionary:
 		return {"ok": false, "error": "Runtime navigation map not found."}
 	if not active_map.has_method("save_navigation_overrides"):
 		return {"ok": false, "error": "Runtime navigation map does not support override saving."}
-	return Dictionary(active_map.call("save_navigation_overrides"))
+	var result := Dictionary(active_map.call("save_navigation_overrides"))
+	if bool(result.get("ok", false)):
+		_overrides_dirty = false
+	return result
+
+
+func bake_navigation_overrides(save_after := true, clear_after := true) -> Dictionary:
+	var active_map := _editable_navigation_map()
+	if not _has_navigation_map(active_map):
+		return {"ok": false, "error": "Runtime navigation map not found."}
+	if not active_map.has_method("bake_navigation_overrides"):
+		return {"ok": false, "error": "Runtime navigation map does not support override baking."}
+	var result := Dictionary(active_map.call("bake_navigation_overrides", save_after, clear_after))
+	if bool(result.get("ok", false)):
+		_overrides_dirty = not clear_after
+		rebuild_navigation_overlay()
+	return result
 
 
 func is_layer_visible(layer_name: String) -> bool:
@@ -580,9 +635,6 @@ func _handle_edit_key(key_event: InputEventKey) -> bool:
 		KEY_C:
 			clear_cell_override(edit_layer_name, edit_cursor_cell)
 			return true
-		KEY_V:
-			save_navigation_overrides()
-			return true
 		KEY_G:
 			snap_edit_cursor_to_player()
 			return true
@@ -606,6 +658,7 @@ func _edit_cursor_delta_for_keycode(keycode: Key) -> Vector2i:
 
 func _move_edit_cursor(delta: Vector2i) -> void:
 	edit_cursor_cell += delta
+	_last_edit_status = "Edit cursor moved to %s %s." % [edit_layer_name, _cell_label(edit_cursor_cell)]
 	_publish_edit_metadata()
 	queue_redraw()
 
@@ -616,6 +669,7 @@ func _cycle_edit_layer(delta: int) -> void:
 		index = 0
 	index = posmod(index + delta, LAYER_NAMES.size())
 	edit_layer_name = LAYER_NAMES[index]
+	_last_edit_status = "Editing %s." % edit_layer_name
 	_publish_edit_metadata()
 	queue_redraw()
 
@@ -691,6 +745,78 @@ func _publish_edit_metadata() -> void:
 	set_meta("navigation_edit_cursor_color", edit_cursor_color)
 	set_meta("navigation_edit_cursor_override_state", cell_override_state(edit_layer_name, edit_cursor_cell))
 	set_meta("navigation_edit_cursor_override_states_by_layer", cell_override_states(edit_cursor_cell))
+	set_meta("navigation_overrides_dirty", _overrides_dirty)
+	set_meta("navigation_edit_status", _last_edit_status)
+	_update_status_hud()
+
+
+func _save_navigation_overrides_with_feedback() -> Dictionary:
+	var result := save_navigation_overrides()
+	if bool(result.get("ok", false)):
+		_last_edit_status = "Saved navigation overrides to %s." % str(result.get("path", ""))
+	else:
+		_last_edit_status = "Save failed: %s" % str(result.get("error", "error code %s" % str(result.get("error_code", "unknown"))))
+	_publish_edit_metadata()
+	queue_redraw()
+	return result
+
+
+func _bake_navigation_overrides_with_feedback() -> Dictionary:
+	var result := bake_navigation_overrides()
+	if bool(result.get("ok", false)):
+		if bool(result.get("baked", false)):
+			_last_edit_status = "Baked %d overrides into %s and cleared override layer." % [
+				int(result.get("force_navigable_count", 0)) + int(result.get("force_blocked_count", 0)),
+				str(result.get("map_path", "")),
+			]
+		else:
+			_last_edit_status = str(result.get("message", "No navigation overrides to bake."))
+	else:
+		_last_edit_status = "Bake failed: %s" % str(result.get("error", "error code %s" % str(result.get("map_error_code", "unknown"))))
+	_publish_edit_metadata()
+	queue_redraw()
+	return result
+
+
+func _ensure_status_hud() -> void:
+	if not show_edit_status_hud or _status_label != null:
+		return
+	_status_canvas = CanvasLayer.new()
+	_status_canvas.name = "NavigationEditStatusHUD"
+	_status_canvas.layer = 120
+	_status_label = Label.new()
+	_status_label.name = "Status"
+	_status_label.anchor_left = 0.0
+	_status_label.anchor_top = 1.0
+	_status_label.anchor_right = 0.0
+	_status_label.anchor_bottom = 1.0
+	_status_label.offset_left = 18.0
+	_status_label.offset_top = -92.0
+	_status_label.offset_right = 1120.0
+	_status_label.offset_bottom = -18.0
+	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status_label.add_theme_font_size_override("font_size", 15)
+	_status_label.add_theme_color_override("font_color", Color(0.94, 0.94, 0.86, 1.0))
+	_status_label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.82))
+	_status_label.add_theme_constant_override("shadow_offset_x", 1)
+	_status_label.add_theme_constant_override("shadow_offset_y", 1)
+	_status_canvas.add_child(_status_label)
+	add_child(_status_canvas)
+	_update_status_hud()
+
+
+func _update_status_hud() -> void:
+	if _status_label == null:
+		return
+	var dirty_text := "unsaved changes" if _overrides_dirty else "saved/no pending changes"
+	var edit_text := "edit on" if edit_mode_enabled else "edit off"
+	_status_label.text = "%s | %s | %s %s | %s\nN edit, arrows/WASD move cursor in edit mode, Q/E layer, Insert force navigable, Delete force blocked, C clear, V or Ctrl+S save, Ctrl+B bake, Ctrl+Q quit." % [
+		edit_text,
+		dirty_text,
+		edit_layer_name,
+		_cell_label(edit_cursor_cell),
+		_last_edit_status,
+	]
 
 
 func _set_player_movement_input_suppressed(is_suppressed: bool) -> void:
@@ -798,6 +924,10 @@ func _cell_payload(cell: Vector2i) -> Dictionary:
 
 func _cell_key(layer_name: String, cell: Vector2i) -> String:
 	return "%s:%d,%d" % [layer_name, cell.x, cell.y]
+
+
+func _cell_label(cell: Vector2i) -> String:
+	return "(%d,%d)" % [cell.x, cell.y]
 
 
 func _variant_to_cell(value) -> Vector2i:

@@ -81,10 +81,14 @@ The generated SC Demo runtime scene includes an overlay edit mode:
 - `Insert`: force the cursor cell navigable.
 - `Delete`: force the cursor cell blocked. Backspace is intentionally not mapped.
 - `C`: clear the cursor cell override.
-- `V`: save overrides.
+- `V` / `Ctrl+S`: save overrides.
+- `Ctrl+B`: bake current overrides into the base navigation map and clear the override layer.
+- `Ctrl+Q`: quit the running app.
 - `G`: snap the cursor to the player cell.
 - `1/2/3`: toggle layer visibility.
 
 Overrides apply to the active edit layer only. To edit the same coordinate on multiple elevations, use `Q/E` to switch layers and repeat the action intentionally on each layer.
+
+Use baking only after the overlay corrections are stable. Baking folds force-navigable cells into the map's walkable cell list, removes force-blocked cells from the walkable list, records them in the blocked list, and then clears the separate override resource.
 
 The same command list is also generated as a visible `CommandLegendHUD` panel at the bottom of the running scene and as a world-space `CommandLegend` panel below the imported SC Demo runtime map.

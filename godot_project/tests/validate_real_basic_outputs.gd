@@ -178,7 +178,8 @@ func _validate_imported_unity_scene_runtime(scene_path: String) -> void:
 			_assert_true(legend_text.contains("Delete force-blocked"), "Imported SC Demo runtime command legend documents Delete force-blocked override")
 			_assert_true(legend_text.contains("Edits affect only the active layer"), "Imported SC Demo runtime command legend documents active-layer-only overrides")
 			_assert_true(legend_text.contains("Switch layers with Q / E"), "Imported SC Demo runtime command legend documents repeated stacked-cell edits")
-			_assert_true(legend_text.contains("V saves overrides"), "Imported SC Demo runtime command legend documents saving overrides")
+			_assert_true(legend_text.contains("V or Ctrl+S saves overrides"), "Imported SC Demo runtime command legend documents saving overrides")
+			_assert_true(legend_text.contains("Ctrl+B bakes overrides"), "Imported SC Demo runtime command legend documents baking overrides")
 	if command_legend_hud is CanvasLayer:
 		_assert_true(bool(command_legend_hud.get_meta("cainos_runtime_command_legend_hud", false)), "Imported SC Demo runtime command legend HUD is tagged")
 		var hud_label := (command_legend_hud as Node).get_node_or_null("Instructions")

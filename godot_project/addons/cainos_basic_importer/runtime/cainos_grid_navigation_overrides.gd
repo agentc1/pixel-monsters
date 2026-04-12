@@ -97,6 +97,20 @@ func has_overrides() -> bool:
 	return false
 
 
+func clear_all_overrides() -> Dictionary:
+	var cleared_counts := override_counts_by_layer()
+	for layer_name in layer_names:
+		_ensure_layer(layer_name)
+		cells_by_layer[layer_name] = {
+			STATE_FORCE_NAVIGABLE: [],
+			STATE_FORCE_BLOCKED: [],
+		}
+	return {
+		"ok": true,
+		"cleared_counts_by_layer": cleared_counts,
+	}
+
+
 func variant_to_cell(value) -> Vector2i:
 	if value is Vector2i:
 		return value
