@@ -21,7 +21,7 @@ Current v1 shape:
 - fallback output: atlas-cell scenes when semantic metadata is unavailable or disabled
 - helper assets: preview map, prefab catalog, runtime player/stairs/altar demos, imported-scene reports, compatibility report, and import manifest
 
-Use `godot_project/docs/Quickstart.md` for the beginner workflow and `godot_project/docs/KnownDifferences.md` for the v1 compatibility boundary.
+Use `godot_project/docs/Quickstart.md` for the beginner workflow, `godot_project/docs/KnownDifferences.md` for the v1 compatibility boundary, and `godot_project/docs/ComplexPackageRoadmap.md` for the run-up to importing a more sophisticated Unity package.
 
 Regression and QA assets:
 - automated synthetic regression runner: `godot_project/tests/run_basic_regressions.sh`
