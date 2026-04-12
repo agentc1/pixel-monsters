@@ -490,8 +490,55 @@ func _validate_grid_step_contract(player: CharacterBody2D) -> void:
 	for _index in range(GRID_STEP_WAIT_FRAMES * 2):
 		await physics_frame
 	_send_key(KEY_W, false)
-	await physics_frame
-	_assert_vector2_close(player.global_position, Vector2(128.0, 224.0), "Runtime grid ignores held-key repeat until release")
+	for _index in range(GRID_STEP_WAIT_FRAMES):
+		await physics_frame
+	_assert_true(player.global_position.y <= 192.0, "Runtime grid held-key input chains at least two north cells")
+	_assert_grid_center(player, "Runtime grid held-key repeat still lands on a cell center")
+
+	var turn_route := _first_two_step_route(player, "Layer 1", "north", "east")
+	_assert_true(not turn_route.is_empty(), "Runtime grid validation finds a two-step turn-buffer route")
+	if not turn_route.is_empty():
+		var start_cell := _variant_to_cell(turn_route.get("start_cell", Vector2i.ZERO))
+		var target_cell := _variant_to_cell(turn_route.get("target_cell", Vector2i.ZERO))
+		await _place_player(player, _grid_position_for_cell(start_cell), str(turn_route.get("start_layer", "Layer 1")))
+		_send_key(KEY_W, true)
+		await process_frame
+		await physics_frame
+		_send_key(KEY_D, true)
+		await process_frame
+		await physics_frame
+		_send_key(KEY_D, false)
+		await process_frame
+		_send_key(KEY_W, false)
+		for _index in range(GRID_STEP_WAIT_FRAMES * 2):
+			await physics_frame
+		_assert_vector2_close(player.global_position, _grid_position_for_cell(target_cell), "Runtime grid buffers a new turn direction during the current step")
+		_assert_grid_center(player, "Runtime grid buffered turn lands on a cell center")
+
+
+func _first_two_step_route(player: CharacterBody2D, layer_name: String, first_direction: String, second_direction: String) -> Dictionary:
+	var navigation_map = player.get("navigation_map")
+	if not (navigation_map is Resource):
+		return {}
+	if not (navigation_map as Resource).has_method("navigable_cells_for_layer"):
+		return {}
+	for cell_variant in Array((navigation_map as Resource).call("navigable_cells_for_layer", layer_name)):
+		var start_cell := _variant_to_cell(cell_variant)
+		var first_step: Dictionary = player.call("can_grid_step_from_cell", layer_name, start_cell, first_direction)
+		if not bool(first_step.get("allowed", false)):
+			continue
+		var middle_layer := str(first_step.get("to_layer", layer_name))
+		var middle_cell := _variant_to_cell(first_step.get("to_cell", start_cell))
+		var second_step: Dictionary = player.call("can_grid_step_from_cell", middle_layer, middle_cell, second_direction)
+		if not bool(second_step.get("allowed", false)):
+			continue
+		return {
+			"start_layer": layer_name,
+			"start_cell": start_cell,
+			"target_layer": str(second_step.get("to_layer", middle_layer)),
+			"target_cell": _variant_to_cell(second_step.get("to_cell", middle_cell)),
+		}
+	return {}
 
 
 func _validate_north_bridge_spawn_route(player: CharacterBody2D) -> void:

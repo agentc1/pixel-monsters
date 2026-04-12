@@ -33,12 +33,12 @@ const GRID_WALKABLE_FOOTPRINT_RADIUS := 15.0
 @export var grid_navigation_bounds := Rect2i()
 @export var navigation_map: Resource
 @export var movement_input_suppressed := false
+@export var grid_input_buffer_enabled := true
 
 var _player_root: Node2D
 var _controller: Node
 var _follow_camera: Camera2D
 var _grid_is_moving := false
-var _grid_waiting_for_release := false
 var _grid_step_elapsed := 0.0
 var _grid_start_position := Vector2.ZERO
 var _grid_target_position := Vector2.ZERO
@@ -50,6 +50,8 @@ var _grid_step_direction_name := "south"
 var _grid_path_positions := []
 var _grid_layer_switch_t := 0.0
 var _grid_layer_switched := true
+var _grid_queued_direction_name := ""
+var _grid_last_failed_direction_name := ""
 
 
 func _ready() -> void:
@@ -87,17 +89,17 @@ func _physics_process(delta: float) -> void:
 func _physics_process_grid(delta: float) -> void:
 	velocity = Vector2.ZERO
 	if _grid_is_moving:
+		_capture_grid_buffered_input()
 		_advance_grid_step(delta)
 		return
 	_snap_to_grid_position()
-	var input_vector := _movement_input()
-	var direction_name := _grid_direction_name_from_input(input_vector)
+	var direction_name := _grid_input_direction_name()
 	if direction_name.is_empty():
-		_grid_waiting_for_release = false
+		_grid_last_failed_direction_name = ""
 		_apply_controller_facing(_grid_step_direction_name, false)
 		_sync_player_root()
 		return
-	if _grid_waiting_for_release:
+	if direction_name == _grid_last_failed_direction_name:
 		_apply_controller_facing(direction_name, false)
 		_sync_player_root()
 		return
@@ -111,6 +113,51 @@ func _movement_input() -> Vector2:
 	if _controller != null and _controller.has_method("movement_input_vector"):
 		return _controller.call("movement_input_vector")
 	return Vector2.ZERO
+
+
+func _grid_input_direction_name() -> String:
+	if movement_input_suppressed:
+		return ""
+	if _controller != null and _controller.has_method("movement_grid_direction"):
+		return _normalize_grid_direction(str(_controller.call("movement_grid_direction")))
+	return _grid_direction_name_from_input(_movement_input())
+
+
+func _capture_grid_buffered_input() -> void:
+	if not grid_input_buffer_enabled or movement_input_suppressed:
+		return
+	var pressed_direction := _normalize_grid_direction(_consume_controller_grid_direction_press())
+	if pressed_direction.is_empty():
+		return
+	_grid_queued_direction_name = pressed_direction
+	set_meta("cainos_grid_queued_direction_name", _grid_queued_direction_name)
+
+
+func _attempt_next_buffered_grid_step() -> void:
+	if movement_input_suppressed:
+		_grid_queued_direction_name = ""
+		set_meta("cainos_grid_queued_direction_name", _grid_queued_direction_name)
+		return
+	var next_direction := _grid_queued_direction_name
+	_grid_queued_direction_name = ""
+	if next_direction.is_empty():
+		next_direction = _grid_input_direction_name()
+	next_direction = _normalize_grid_direction(next_direction)
+	set_meta("cainos_grid_queued_direction_name", _grid_queued_direction_name)
+	if next_direction.is_empty():
+		return
+	_attempt_grid_step(next_direction)
+
+
+func _consume_controller_grid_direction_press() -> String:
+	if _controller != null and _controller.has_method("consume_grid_direction_press"):
+		return str(_controller.call("consume_grid_direction_press"))
+	return ""
+
+
+func _clear_controller_grid_direction_press() -> void:
+	if _controller != null and _controller.has_method("clear_grid_direction_press"):
+		_controller.call("clear_grid_direction_press")
 
 
 func _desired_velocity(input_vector: Vector2) -> Vector2:
@@ -165,15 +212,20 @@ func _layer_collision_bit(layer_name: String) -> int:
 	return int(LAYER_COLLISION_BITS.get(layer_name, LAYER_COLLISION_BITS["Layer 1"]))
 
 
-func _attempt_grid_step(direction_name: String) -> void:
-	_grid_waiting_for_release = true
+func _attempt_grid_step(direction_name: String) -> bool:
+	if direction_name.is_empty():
+		return false
+	_clear_controller_grid_direction_press()
 	_grid_step_direction_name = direction_name
 	var from_layer := current_collision_layer_name
 	var from_cell := _grid_cell_for_position(global_position)
 	var step := can_grid_step_from_cell(from_layer, from_cell, direction_name)
 	if not bool(step.get("allowed", false)):
+		_grid_last_failed_direction_name = direction_name
+		set_meta("cainos_grid_last_failed_direction", direction_name)
+		set_meta("cainos_grid_last_failed_reason", str(step.get("reason", "")))
 		_apply_controller_facing(direction_name, false)
-		return
+		return false
 	var to_layer := str(step.get("to_layer", from_layer))
 	var to_cell := _grid_variant_to_cell(step.get("to_cell", from_cell))
 	var to_position := _grid_position_for_cell(to_cell)
@@ -191,7 +243,10 @@ func _attempt_grid_step(direction_name: String) -> void:
 	_grid_target_cell = to_cell
 	_grid_start_layer = from_layer
 	_grid_target_layer = to_layer
+	_grid_last_failed_direction_name = ""
+	set_meta("cainos_grid_queued_direction_name", _grid_queued_direction_name)
 	_apply_controller_facing(direction_name, true)
+	return true
 
 
 func _advance_grid_step(delta: float) -> void:
@@ -214,6 +269,7 @@ func _advance_grid_step(delta: float) -> void:
 	_sync_player_root()
 	_apply_controller_facing(_grid_step_direction_name, false)
 	emit_signal("grid_step_finished", _grid_start_cell, _grid_target_cell, _grid_start_layer, _grid_target_layer)
+	_attempt_next_buffered_grid_step()
 
 
 func _grid_step_path_positions(from_position: Vector2, to_position: Vector2, step: Dictionary) -> Array:
@@ -271,7 +327,9 @@ func grid_position_for_cell(cell: Vector2i) -> Vector2:
 
 func set_movement_input_suppressed(is_suppressed: bool) -> void:
 	movement_input_suppressed = is_suppressed
-	_grid_waiting_for_release = false
+	_grid_queued_direction_name = ""
+	_grid_last_failed_direction_name = ""
+	set_meta("cainos_grid_queued_direction_name", _grid_queued_direction_name)
 	velocity = Vector2.ZERO
 	_clear_controller_movement_input()
 	if movement_input_suppressed:
@@ -414,6 +472,14 @@ func _grid_direction_name_from_input(input_vector: Vector2) -> String:
 	if absf(input_vector.x) > absf(input_vector.y):
 		return "east" if input_vector.x > 0.0 else "west"
 	return "north" if input_vector.y < 0.0 else "south"
+
+
+func _normalize_grid_direction(direction_name: String) -> String:
+	match direction_name:
+		"north", "south", "east", "west":
+			return direction_name
+		_:
+			return ""
 
 
 func _grid_direction_cell_delta(direction_name: String) -> Vector2i:

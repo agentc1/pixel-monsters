@@ -37,6 +37,8 @@ var _body_sprite: Sprite2D
 var _shadow_sprite: Sprite2D
 var _actor_helper: Node
 var _current_direction := "south"
+var _last_pressed_grid_direction := ""
+var _queued_grid_direction_press := ""
 
 
 func _ready() -> void:
@@ -57,6 +59,11 @@ func _input(event: InputEvent) -> void:
 	var keycode := int(key_event.physical_keycode if key_event.physical_keycode != KEY_NONE else key_event.keycode)
 	if _pressed_keys.has(keycode):
 		_pressed_keys[keycode] = key_event.pressed
+		if key_event.pressed:
+			var direction_name := _grid_direction_for_key(keycode)
+			if not direction_name.is_empty():
+				_last_pressed_grid_direction = direction_name
+				_queued_grid_direction_press = direction_name
 
 
 func _physics_process(delta: float) -> void:
@@ -111,9 +118,32 @@ func movement_input_vector() -> Vector2:
 	return _movement_input()
 
 
+func movement_grid_direction() -> String:
+	if not _last_pressed_grid_direction.is_empty() and _is_grid_direction_pressed(_last_pressed_grid_direction):
+		return _last_pressed_grid_direction
+	var input_vector := _movement_input()
+	if input_vector.length_squared() <= 0.0001:
+		return ""
+	var fallback_direction := _direction_from_input(input_vector)
+	_last_pressed_grid_direction = fallback_direction
+	return fallback_direction
+
+
+func consume_grid_direction_press() -> String:
+	var direction_name := _queued_grid_direction_press
+	_queued_grid_direction_press = ""
+	return direction_name
+
+
 func clear_movement_input() -> void:
 	for keycode in _pressed_keys.keys():
 		_pressed_keys[keycode] = false
+	_last_pressed_grid_direction = ""
+	_queued_grid_direction_press = ""
+
+
+func clear_grid_direction_press() -> void:
+	_queued_grid_direction_press = ""
 
 
 func desired_velocity_from_input(input_vector: Vector2) -> Vector2:
@@ -147,6 +177,34 @@ func _movement_input() -> Vector2:
 	if bool(_pressed_keys.get(KEY_S, false)) or bool(_pressed_keys.get(KEY_DOWN, false)):
 		y += 1.0
 	return Vector2(x, y)
+
+
+func _grid_direction_for_key(keycode: int) -> String:
+	match keycode:
+		KEY_A, KEY_LEFT:
+			return "west"
+		KEY_D, KEY_RIGHT:
+			return "east"
+		KEY_W, KEY_UP:
+			return "north"
+		KEY_S, KEY_DOWN:
+			return "south"
+		_:
+			return ""
+
+
+func _is_grid_direction_pressed(direction_name: String) -> bool:
+	match direction_name:
+		"west":
+			return bool(_pressed_keys.get(KEY_A, false)) or bool(_pressed_keys.get(KEY_LEFT, false))
+		"east":
+			return bool(_pressed_keys.get(KEY_D, false)) or bool(_pressed_keys.get(KEY_RIGHT, false))
+		"north":
+			return bool(_pressed_keys.get(KEY_W, false)) or bool(_pressed_keys.get(KEY_UP, false))
+		"south":
+			return bool(_pressed_keys.get(KEY_S, false)) or bool(_pressed_keys.get(KEY_DOWN, false))
+		_:
+			return false
 
 
 func _direction_from_input(input_vector: Vector2) -> String:
