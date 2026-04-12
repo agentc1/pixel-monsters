@@ -8,6 +8,7 @@ const CainosRuntimeActor2D := preload("res://addons/cainos_basic_importer/runtim
 const CainosTopDownPlayerController2D := preload("res://addons/cainos_basic_importer/runtime/cainos_top_down_player_controller_2d.gd")
 const CainosRuntimePlayerBody2D := preload("res://addons/cainos_basic_importer/runtime/cainos_runtime_player_body_2d.gd")
 const CainosGridNavigationMap := preload("res://addons/cainos_basic_importer/runtime/cainos_grid_navigation_map.gd")
+const CainosGridNavigationOverrides := preload("res://addons/cainos_basic_importer/runtime/cainos_grid_navigation_overrides.gd")
 const CainosGridNavigationOverlay2D := preload("res://addons/cainos_basic_importer/runtime/cainos_grid_navigation_overlay_2d.gd")
 const CainosImportedScenePreview := preload("res://addons/cainos_basic_importer/runtime/cainos_imported_scene_preview.gd")
 const CainosStairsTrigger2D := preload("res://addons/cainos_basic_importer/runtime/cainos_stairs_trigger_2d.gd")
@@ -33,6 +34,12 @@ const RUNTIME_PLAYER_FOOTPRINT_SIZE := Vector2(30.0, 30.0)
 const RUNTIME_GRID_CELL_SIZE := 32.0
 const RUNTIME_GRID_ORIGIN := Vector2.ZERO
 const RUNTIME_ACTOR_COLLISION_LAYER_BIT := 8
+const RUNTIME_COMMAND_LEGEND_MARGIN_Y := 96.0
+const RUNTIME_COMMAND_LEGEND_HEIGHT := 256.0
+const RUNTIME_COMMAND_LEGEND_MIN_WIDTH := 960.0
+const RUNTIME_COMMAND_LEGEND_PADDING := 24.0
+const RUNTIME_COMMAND_LEGEND_HUD_HEIGHT := 168.0
+const RUNTIME_COMMAND_LEGEND_HUD_MARGIN := 12.0
 const RUNTIME_ELEVATION_COLLISION_BITS := {
 	"Layer 1": 1,
 	"Layer 2": 2,
@@ -89,6 +96,7 @@ const TILESET_SPECS := [
 var _editor_interface
 var _log: Callable
 var _active_output_root := DEFAULT_OUTPUT_ROOT
+var _preserved_navigation_overrides_by_path := {}
 
 
 func _init(editor_interface = null, logger: Callable = Callable()) -> void:
@@ -152,6 +160,7 @@ func import_source(source_path: String, profile: Dictionary = {}) -> Dictionary:
 	var output_root := str(normalized_profile.get("output_root", DEFAULT_OUTPUT_ROOT))
 	_active_output_root = output_root
 	var output_root_abs := ProjectSettings.globalize_path(output_root)
+	_preserved_navigation_overrides_by_path = _preserve_navigation_overrides(output_root)
 	var source_info: Dictionary = scan.get("source", {})
 	var semantic_registry: Dictionary = scan.get("semantic_registry", {})
 	var inventory: Dictionary = scan.get("inventory", {})
@@ -1328,13 +1337,26 @@ func _generate_unity_scene_runtime(scene: Dictionary, raw_scene_path: String, pr
 	root.add_child(runtime_player)
 
 	var scene_bounds := _compute_canvas_bounds(raw_instance)
+	var command_legend := _build_unity_scene_command_legend(scene_bounds)
+	root.add_child(command_legend)
+	root.add_child(_build_unity_scene_command_legend_hud())
+	var legend_world_rect: Rect2 = command_legend.get_meta("legend_world_rect", Rect2())
+	var camera_bounds := _rect2_union(scene_bounds, legend_world_rect)
 	var camera_marker := _primary_scene_camera_marker(scene)
-	_configure_unity_scene_runtime_camera(runtime_player, scene_bounds, camera_marker, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
+	_configure_unity_scene_runtime_camera(runtime_player, camera_bounds, camera_marker, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
 	if str(scene.get("name", "")) == "SC Demo":
 		var navigation_bounds := _runtime_grid_navigation_bounds(runtime_player, scene_bounds, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
 		runtime_player.set("grid_navigation_bounds", navigation_bounds)
 		var navigation_map := _build_unity_scene_navigation_map(scene, raw_instance as Node2D, runtime_player, navigation_bounds, Vector2(runtime_player_result.get("spawn_position", Vector2.ZERO)))
 		var navigation_map_path := _active_output_root.path_join("navigation/%s_navigation_map.tres" % _sanitize_filename(str(scene.get("name", "SC Demo"))))
+		var navigation_overrides_path := _active_output_root.path_join("navigation/%s_navigation_overrides.tres" % _sanitize_filename(str(scene.get("name", "SC Demo"))))
+		var navigation_overrides := _load_or_create_navigation_overrides(navigation_overrides_path, scene)
+		var navigation_overrides_save_err := _save_resource(navigation_overrides, navigation_overrides_path)
+		if navigation_overrides_save_err != OK:
+			root.free()
+			return {"ok": false, "error": "Could not save Unity runtime navigation overrides: %s" % navigation_overrides_path}
+		navigation_overrides.resource_path = navigation_overrides_path
+		navigation_map.set("navigation_overrides", navigation_overrides)
 		var navigation_save_err := _save_resource(navigation_map, navigation_map_path)
 		if navigation_save_err != OK:
 			root.free()
@@ -2088,7 +2110,7 @@ func _runtime_stair_walkable_regions(root_position: Vector2, source_prefab_path:
 		var center_cell := _runtime_grid_cell_for_position(root_position)
 		var half_depth_cells := ceili((STAIR_RUNTIME_WALKABLE_DEPTH * 0.5) / RUNTIME_GRID_CELL_SIZE)
 		var lower_cell := center_cell + lower_side_delta * half_depth_cells
-		var upper_cell := lower_cell - lower_side_delta
+		var upper_cell := lower_cell - lower_side_delta + Vector2i(0, -1)
 		return [_runtime_grid_cell_support_rect(upper_cell)]
 	return []
 
@@ -2291,9 +2313,12 @@ func _append_runtime_stair_grid_edges(edges: Array, base_layer_name: String, upp
 	var half_depth_cells := ceili((STAIR_RUNTIME_WALKABLE_DEPTH * 0.5) / RUNTIME_GRID_CELL_SIZE)
 	var lower_cell := center_cell + lower_side_delta * half_depth_cells
 	var upper_cell := lower_cell - lower_side_delta
+	var uses_diagonal_waypoint := lower_side_direction == "east" or lower_side_direction == "west"
+	if uses_diagonal_waypoint:
+		upper_cell += Vector2i(0, -1)
 	var enter_direction := _runtime_grid_direction_name(-lower_side_delta)
 	var exit_direction := _runtime_grid_direction_name(lower_side_delta)
-	edges.append({
+	var enter_edge := {
 		"kind": "stairs",
 		"source_prefab_path": source_prefab_path,
 		"from_layer": base_layer_name,
@@ -2301,8 +2326,8 @@ func _append_runtime_stair_grid_edges(edges: Array, base_layer_name: String, upp
 		"direction": enter_direction,
 		"to_layer": upper_layer_name,
 		"to_cell": upper_cell,
-	})
-	edges.append({
+	}
+	var exit_edge := {
 		"kind": "stairs",
 		"source_prefab_path": source_prefab_path,
 		"from_layer": upper_layer_name,
@@ -2310,7 +2335,17 @@ func _append_runtime_stair_grid_edges(edges: Array, base_layer_name: String, upp
 		"direction": exit_direction,
 		"to_layer": base_layer_name,
 		"to_cell": lower_cell,
-	})
+	}
+	if uses_diagonal_waypoint:
+		var waypoint := _runtime_grid_position_for_cell(lower_cell).lerp(_runtime_grid_position_for_cell(upper_cell), 0.5)
+		enter_edge["movement_kind"] = "diagonal_stair_waypoint"
+		enter_edge["waypoints"] = [waypoint]
+		enter_edge["layer_switch_t"] = 0.5
+		exit_edge["movement_kind"] = "diagonal_stair_waypoint"
+		exit_edge["waypoints"] = [waypoint]
+		exit_edge["layer_switch_t"] = 0.5
+	edges.append(enter_edge)
+	edges.append(exit_edge)
 
 
 func _runtime_stair_direction_from_path(source_prefab_path: String) -> String:
@@ -2368,6 +2403,109 @@ func _build_unity_scene_navigation_overlay(navigation_bounds: Rect2i, navigation
 	overlay.visible = true
 	overlay.set_meta("cainos_grid_navigation_overlay", true)
 	return overlay
+
+
+func _build_unity_scene_command_legend(scene_bounds: Rect2) -> Node2D:
+	var legend_rect := _runtime_command_legend_rect(scene_bounds)
+	var legend := Node2D.new()
+	legend.name = "CommandLegend"
+	legend.position = legend_rect.position
+	legend.z_as_relative = false
+	legend.z_index = 4095
+	legend.set_meta("cainos_runtime_command_legend", true)
+	legend.set_meta("legend_world_rect", legend_rect)
+
+	var backdrop := ColorRect.new()
+	backdrop.name = "Backdrop"
+	backdrop.position = Vector2.ZERO
+	backdrop.size = legend_rect.size
+	backdrop.color = Color(0.035, 0.04, 0.032, 0.88)
+	legend.add_child(backdrop)
+
+	var border := ColorRect.new()
+	border.name = "TopRule"
+	border.position = Vector2.ZERO
+	border.size = Vector2(legend_rect.size.x, 4.0)
+	border.color = Color(0.72, 0.68, 0.42, 0.95)
+	legend.add_child(border)
+
+	var label := Label.new()
+	label.name = "Instructions"
+	label.position = Vector2(RUNTIME_COMMAND_LEGEND_PADDING, RUNTIME_COMMAND_LEGEND_PADDING)
+	label.size = legend_rect.size - Vector2(RUNTIME_COMMAND_LEGEND_PADDING * 2.0, RUNTIME_COMMAND_LEGEND_PADDING * 2.0)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.text = _runtime_command_legend_text()
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", Color(0.92, 0.91, 0.82, 1.0))
+	label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.65))
+	label.add_theme_constant_override("shadow_offset_x", 1)
+	label.add_theme_constant_override("shadow_offset_y", 1)
+	legend.add_child(label)
+	return legend
+
+
+func _build_unity_scene_command_legend_hud() -> CanvasLayer:
+	var hud := CanvasLayer.new()
+	hud.name = "CommandLegendHUD"
+	hud.layer = 100
+	hud.set_meta("cainos_runtime_command_legend_hud", true)
+
+	var backdrop := ColorRect.new()
+	backdrop.name = "Backdrop"
+	_anchor_control_to_bottom_panel(backdrop, RUNTIME_COMMAND_LEGEND_HUD_MARGIN, RUNTIME_COMMAND_LEGEND_HUD_HEIGHT)
+	backdrop.color = Color(0.035, 0.04, 0.032, 0.82)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(backdrop)
+
+	var label := Label.new()
+	label.name = "Instructions"
+	_anchor_control_to_bottom_panel(
+		label,
+		RUNTIME_COMMAND_LEGEND_HUD_MARGIN + 16.0,
+		RUNTIME_COMMAND_LEGEND_HUD_HEIGHT - 32.0
+	)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.text = _runtime_command_legend_text()
+	label.add_theme_font_size_override("font_size", 15)
+	label.add_theme_color_override("font_color", Color(0.92, 0.91, 0.82, 1.0))
+	label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.75))
+	label.add_theme_constant_override("shadow_offset_x", 1)
+	label.add_theme_constant_override("shadow_offset_y", 1)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(label)
+	return hud
+
+
+func _anchor_control_to_bottom_panel(control: Control, margin: float, height: float) -> void:
+	control.anchor_left = 0.0
+	control.anchor_top = 1.0
+	control.anchor_right = 1.0
+	control.anchor_bottom = 1.0
+	control.offset_left = margin
+	control.offset_top = -margin - height
+	control.offset_right = -margin
+	control.offset_bottom = -margin
+
+
+func _runtime_command_legend_rect(scene_bounds: Rect2) -> Rect2:
+	var width := maxf(scene_bounds.size.x, RUNTIME_COMMAND_LEGEND_MIN_WIDTH)
+	var x := scene_bounds.position.x
+	if scene_bounds.size.x < RUNTIME_COMMAND_LEGEND_MIN_WIDTH:
+		x = scene_bounds.get_center().x - width * 0.5
+	var y := scene_bounds.end.y + RUNTIME_COMMAND_LEGEND_MARGIN_Y
+	return Rect2(Vector2(x, y), Vector2(width, RUNTIME_COMMAND_LEGEND_HEIGHT))
+
+
+func _runtime_command_legend_text() -> String:
+	var lines: PackedStringArray = [
+		"SC Demo Runtime Controls",
+		"Move: WASD or arrow keys. One tap moves one 32x32 tile.",
+		"Navigation overlay: 1 / 2 / 3 toggle Layer 1 amber, Layer 2 cyan, and Layer 3 magenta.",
+		"Edit mode: N toggles editing and transfers WASD / arrow keys to the opaque layer-colored cursor. Q / E switch the edit layer. G snaps it to the player.",
+		"Overrides: Insert force-navigable, Delete force-blocked, C clears. Edits affect only the active layer; Switch layers with Q / E for stacked cells. V saves overrides.",
+		"Use the overlays as the navigation source of truth, then save designer corrections into the generated override resource.",
+	]
+	return "\n".join(lines)
 
 
 func _runtime_grid_navigation_bounds(runtime_player: CharacterBody2D, scene_bounds: Rect2, spawn_position: Vector2) -> Rect2i:
@@ -2539,6 +2677,16 @@ func _camera_limits_rect(bounds: Rect2) -> Rect2i:
 		ceili(bounds.size.x),
 		ceili(bounds.size.y)
 	)
+
+
+func _rect2_union(a: Rect2, b: Rect2) -> Rect2:
+	if a.size.x <= 0.0 or a.size.y <= 0.0:
+		return b
+	if b.size.x <= 0.0 or b.size.y <= 0.0:
+		return a
+	var min_point := Vector2(minf(a.position.x, b.position.x), minf(a.position.y, b.position.y))
+	var max_point := Vector2(maxf(a.end.x, b.end.x), maxf(a.end.y, b.end.y))
+	return Rect2(min_point, max_point - min_point)
 
 
 func _compute_canvas_bounds(node: Node) -> Rect2:
@@ -4423,6 +4571,49 @@ func _sha256_text(text: String) -> String:
 	ctx.start(HashingContext.HASH_SHA256)
 	ctx.update(text.to_utf8_buffer())
 	return ctx.finish().hex_encode()
+
+
+func _preserve_navigation_overrides(output_root: String) -> Dictionary:
+	var preserved := {}
+	var navigation_dir := output_root.path_join("navigation")
+	var navigation_dir_abs := ProjectSettings.globalize_path(navigation_dir)
+	if not DirAccess.dir_exists_absolute(navigation_dir_abs):
+		return preserved
+	var dir := DirAccess.open(navigation_dir_abs)
+	if dir == null:
+		return preserved
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	while not file_name.is_empty():
+		if not dir.current_is_dir() and file_name.ends_with("_navigation_overrides.tres"):
+			var res_path := navigation_dir.path_join(file_name)
+			var resource := load(res_path)
+			if resource is Resource and resource.has_method("set_cell_override"):
+				preserved[res_path] = resource
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	return preserved
+
+
+func _load_or_create_navigation_overrides(res_path: String, scene: Dictionary) -> Resource:
+	var preserved = _preserved_navigation_overrides_by_path.get(res_path)
+	var overrides := preserved as Resource
+	if overrides == null and ResourceLoader.exists(res_path):
+		var loaded := load(res_path)
+		if loaded is Resource and loaded.has_method("set_cell_override"):
+			overrides = loaded as Resource
+	if overrides == null:
+		overrides = CainosGridNavigationOverrides.new()
+	overrides.resource_path = res_path
+	overrides.set("layer_names", ["Layer 1", "Layer 2", "Layer 3"])
+	overrides.set("source_metadata", {
+		"kind": "imported_unity_scene_navigation_overrides",
+		"scene_name": str(scene.get("name", "")),
+		"scene_path": str(scene.get("path", "")),
+		"importer_version": IMPORTER_VERSION,
+		"baseline_map": res_path.get_file().replace("_navigation_overrides.tres", "_navigation_map.tres"),
+	})
+	return overrides
 
 
 func _save_resource(resource: Resource, res_path: String) -> int:

@@ -111,6 +111,11 @@ func movement_input_vector() -> Vector2:
 	return _movement_input()
 
 
+func clear_movement_input() -> void:
+	for keycode in _pressed_keys.keys():
+		_pressed_keys[keycode] = false
+
+
 func desired_velocity_from_input(input_vector: Vector2) -> Vector2:
 	var working_input := input_vector
 	if working_input.length_squared() > 1.0:

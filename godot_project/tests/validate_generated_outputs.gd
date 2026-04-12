@@ -202,10 +202,35 @@ func _validate_imported_scene_runtime(output_root: String, sample_scene: Diction
 	var scene_collision := instance.get_node_or_null("SceneCollision")
 	var runtime_player := instance.get_node_or_null("RuntimePlayer")
 	var navigation_overlay := instance.get_node_or_null("NavigationOverlay")
+	var command_legend := instance.get_node_or_null("CommandLegend")
+	var command_legend_hud := instance.get_node_or_null("CommandLegendHUD")
 	_assert_true(scene_instance is Node2D, "Imported SC Demo runtime includes SceneInstance root")
 	_assert_true(scene_collision is Node2D, "Imported SC Demo runtime includes SceneCollision root")
 	_assert_true(runtime_player is CharacterBody2D, "Imported SC Demo runtime includes CharacterBody2D wrapper player")
 	_assert_true(navigation_overlay is Node2D, "Imported SC Demo runtime includes grid navigation overlay")
+	_assert_true(command_legend is Node2D, "Imported SC Demo runtime includes command legend below the map")
+	_assert_true(command_legend_hud is CanvasLayer, "Imported SC Demo runtime includes visible command legend HUD")
+	if command_legend is Node2D:
+		_assert_true(bool(command_legend.get_meta("cainos_runtime_command_legend", false)), "Imported SC Demo runtime command legend is tagged")
+		var legend_label := (command_legend as Node).get_node_or_null("Instructions")
+		_assert_true(legend_label is Label, "Imported SC Demo runtime command legend includes instructions")
+		if legend_label is Label:
+			var legend_text := (legend_label as Label).text
+			_assert_true(legend_text.contains("WASD"), "Imported SC Demo runtime command legend documents movement")
+			_assert_true(legend_text.contains("1 / 2 / 3"), "Imported SC Demo runtime command legend documents overlay toggles")
+			_assert_true(legend_text.contains("N toggles editing"), "Imported SC Demo runtime command legend documents edit mode")
+			_assert_true(legend_text.contains("WASD / arrow keys"), "Imported SC Demo runtime command legend documents cursor movement")
+			_assert_true(legend_text.contains("Insert force-navigable"), "Imported SC Demo runtime command legend documents Insert force-navigable override")
+			_assert_true(legend_text.contains("Delete force-blocked"), "Imported SC Demo runtime command legend documents Delete force-blocked override")
+			_assert_true(legend_text.contains("Edits affect only the active layer"), "Imported SC Demo runtime command legend documents active-layer-only overrides")
+			_assert_true(legend_text.contains("Switch layers with Q / E"), "Imported SC Demo runtime command legend documents repeated stacked-cell edits")
+			_assert_true(legend_text.contains("V saves overrides"), "Imported SC Demo runtime command legend documents saving overrides")
+	if command_legend_hud is CanvasLayer:
+		_assert_true(bool(command_legend_hud.get_meta("cainos_runtime_command_legend_hud", false)), "Imported SC Demo runtime command legend HUD is tagged")
+		var hud_label := (command_legend_hud as Node).get_node_or_null("Instructions")
+		_assert_true(hud_label is Label, "Imported SC Demo runtime command legend HUD includes instructions")
+		if hud_label is Label:
+			_assert_true((hud_label as Label).text.contains("WASD"), "Imported SC Demo runtime command legend HUD documents movement")
 	if navigation_overlay is Node2D:
 		_assert_true(_script_path(navigation_overlay).ends_with("cainos_grid_navigation_overlay_2d.gd"), "Imported SC Demo runtime navigation overlay uses debug overlay script")
 		_assert_eq(navigation_overlay.get("navigation_bounds") is Rect2i, true, "Imported SC Demo runtime navigation overlay stores grid bounds")

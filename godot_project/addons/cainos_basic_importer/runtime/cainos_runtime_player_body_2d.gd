@@ -32,6 +32,7 @@ const GRID_WALKABLE_FOOTPRINT_RADIUS := 15.0
 @export var grid_blocked_cells_by_layer := {}
 @export var grid_navigation_bounds := Rect2i()
 @export var navigation_map: Resource
+@export var movement_input_suppressed := false
 
 var _player_root: Node2D
 var _controller: Node
@@ -46,6 +47,9 @@ var _grid_target_cell := Vector2i.ZERO
 var _grid_start_layer := "Layer 1"
 var _grid_target_layer := "Layer 1"
 var _grid_step_direction_name := "south"
+var _grid_path_positions := []
+var _grid_layer_switch_t := 0.0
+var _grid_layer_switched := true
 
 
 func _ready() -> void:
@@ -102,6 +106,8 @@ func _physics_process_grid(delta: float) -> void:
 
 
 func _movement_input() -> Vector2:
+	if movement_input_suppressed:
+		return Vector2.ZERO
 	if _controller != null and _controller.has_method("movement_input_vector"):
 		return _controller.call("movement_input_vector")
 	return Vector2.ZERO
@@ -111,6 +117,12 @@ func _desired_velocity(input_vector: Vector2) -> Vector2:
 	if _controller != null and _controller.has_method("desired_velocity_from_input"):
 		return _controller.call("desired_velocity_from_input", input_vector)
 	return Vector2.ZERO
+
+
+func _clear_controller_movement_input() -> void:
+	_resolve_runtime_nodes()
+	if _controller != null and _controller.has_method("clear_movement_input"):
+		_controller.call("clear_movement_input")
 
 
 func _resolve_runtime_nodes() -> void:
@@ -165,8 +177,12 @@ func _attempt_grid_step(direction_name: String) -> void:
 	var to_layer := str(step.get("to_layer", from_layer))
 	var to_cell := _grid_variant_to_cell(step.get("to_cell", from_cell))
 	var to_position := _grid_position_for_cell(to_cell)
-	if to_layer != from_layer:
+	_grid_layer_switch_t = clampf(float(step.get("layer_switch_t", 0.0)), 0.0, 1.0)
+	_grid_path_positions = _grid_step_path_positions(global_position, to_position, step)
+	_grid_layer_switched = to_layer == from_layer
+	if not _grid_layer_switched and _grid_layer_switch_t <= 0.0:
 		_apply_runtime_layer_name(to_layer)
+		_grid_layer_switched = true
 	_grid_is_moving = true
 	_grid_step_elapsed = 0.0
 	_grid_start_position = global_position
@@ -182,16 +198,61 @@ func _advance_grid_step(delta: float) -> void:
 	_grid_step_elapsed += maxf(delta, 0.0)
 	var duration := maxf(grid_step_duration_sec, 0.001)
 	var t := clampf(_grid_step_elapsed / duration, 0.0, 1.0)
-	global_position = _grid_start_position.lerp(_grid_target_position, t)
+	if not _grid_layer_switched and t >= _grid_layer_switch_t:
+		_apply_runtime_layer_name(_grid_target_layer)
+		_grid_layer_switched = true
+	global_position = _grid_position_on_active_path(t)
 	if t < 1.0:
 		_apply_controller_facing(_grid_step_direction_name, true)
 		_sync_player_root()
 		return
+	if not _grid_layer_switched:
+		_apply_runtime_layer_name(_grid_target_layer)
+		_grid_layer_switched = true
 	global_position = _grid_target_position
 	_grid_is_moving = false
 	_sync_player_root()
 	_apply_controller_facing(_grid_step_direction_name, false)
 	emit_signal("grid_step_finished", _grid_start_cell, _grid_target_cell, _grid_start_layer, _grid_target_layer)
+
+
+func _grid_step_path_positions(from_position: Vector2, to_position: Vector2, step: Dictionary) -> Array:
+	var path := [from_position]
+	for waypoint_variant in Array(step.get("waypoints", [])):
+		var waypoint := _grid_variant_to_position(waypoint_variant)
+		if path.is_empty() or Vector2(path[path.size() - 1]).distance_squared_to(waypoint) > 0.0001:
+			path.append(waypoint)
+	if path.is_empty() or Vector2(path[path.size() - 1]).distance_squared_to(to_position) > 0.0001:
+		path.append(to_position)
+	set_meta("cainos_grid_step_path_positions", _grid_position_payloads(path))
+	set_meta("cainos_grid_step_layer_switch_t", _grid_layer_switch_t)
+	set_meta("cainos_grid_step_movement_kind", str(step.get("movement_kind", "")))
+	return path
+
+
+func _grid_position_on_active_path(t: float) -> Vector2:
+	if _grid_path_positions.size() < 2:
+		return _grid_start_position.lerp(_grid_target_position, t)
+	var segment_lengths := []
+	var total_length := 0.0
+	for index in range(_grid_path_positions.size() - 1):
+		var start := Vector2(_grid_path_positions[index])
+		var end := Vector2(_grid_path_positions[index + 1])
+		var length := start.distance_to(end)
+		segment_lengths.append(length)
+		total_length += length
+	if total_length <= 0.0001:
+		return _grid_target_position
+	var target_distance := total_length * clampf(t, 0.0, 1.0)
+	var walked := 0.0
+	for index in range(segment_lengths.size()):
+		var segment_length := float(segment_lengths[index])
+		if target_distance > walked + segment_length and index < segment_lengths.size() - 1:
+			walked += segment_length
+			continue
+		var segment_t := 1.0 if segment_length <= 0.0001 else clampf((target_distance - walked) / segment_length, 0.0, 1.0)
+		return Vector2(_grid_path_positions[index]).lerp(Vector2(_grid_path_positions[index + 1]), segment_t)
+	return _grid_target_position
 
 
 func _snap_to_grid_position() -> void:
@@ -206,6 +267,15 @@ func grid_cell_for_position(point: Vector2) -> Vector2i:
 
 func grid_position_for_cell(cell: Vector2i) -> Vector2:
 	return _grid_position_for_cell(cell)
+
+
+func set_movement_input_suppressed(is_suppressed: bool) -> void:
+	movement_input_suppressed = is_suppressed
+	_grid_waiting_for_release = false
+	velocity = Vector2.ZERO
+	_clear_controller_movement_input()
+	if movement_input_suppressed:
+		_apply_controller_facing(_grid_step_direction_name, false)
 
 
 func grid_direction_cell_delta(direction_name: String) -> Vector2i:
@@ -223,9 +293,16 @@ func grid_step_target(from_layer: String, from_cell: Vector2i, direction_name: S
 	var to_layer := from_layer
 	var transition_edge := _grid_transition_edge(from_layer, from_cell, direction_name)
 	var uses_transition := not transition_edge.is_empty()
+	var waypoints := []
+	var layer_switch_t := 0.0
+	var movement_kind := ""
 	if uses_transition:
 		to_layer = str(transition_edge.get("to_layer", to_layer))
 		to_cell = _grid_variant_to_cell(transition_edge.get("to_cell", to_cell))
+		for waypoint_variant in Array(transition_edge.get("waypoints", [])):
+			waypoints.append(_grid_variant_to_position(waypoint_variant))
+		layer_switch_t = clampf(float(transition_edge.get("layer_switch_t", 0.0)), 0.0, 1.0)
+		movement_kind = str(transition_edge.get("movement_kind", ""))
 	return {
 		"from_layer": from_layer,
 		"from_cell": from_cell,
@@ -233,6 +310,9 @@ func grid_step_target(from_layer: String, from_cell: Vector2i, direction_name: S
 		"to_layer": to_layer,
 		"to_cell": to_cell,
 		"uses_transition": uses_transition,
+		"waypoints": waypoints,
+		"layer_switch_t": layer_switch_t,
+		"movement_kind": movement_kind,
 	}
 
 
@@ -413,6 +493,34 @@ func _grid_variant_to_cell(value) -> Vector2i:
 		if parts.size() == 2:
 			return Vector2i(int(parts[0]), int(parts[1]))
 	return Vector2i.ZERO
+
+
+func _grid_variant_to_position(value) -> Vector2:
+	if value is Vector2:
+		return value
+	if value is Vector2i:
+		var vector_value: Vector2i = value
+		return Vector2(vector_value)
+	if value is Dictionary:
+		var dict_value: Dictionary = value
+		return Vector2(float(dict_value.get("x", 0.0)), float(dict_value.get("y", 0.0)))
+	if value is Array:
+		var array_value: Array = value
+		if array_value.size() >= 2:
+			return Vector2(float(array_value[0]), float(array_value[1]))
+	if value is String:
+		var parts := str(value).split(",", false)
+		if parts.size() == 2:
+			return Vector2(float(parts[0]), float(parts[1]))
+	return Vector2.ZERO
+
+
+func _grid_position_payloads(points: Array) -> Array:
+	var payloads := []
+	for point_variant in points:
+		var point := _grid_variant_to_position(point_variant)
+		payloads.append({"x": point.x, "y": point.y})
+	return payloads
 
 
 func _is_grid_position_supported(point: Vector2, layer_name: String) -> bool:
